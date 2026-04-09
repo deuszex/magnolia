@@ -1,0 +1,73 @@
+[package]
+name = "magnolia-common"
+version = "1.0.0"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+
+[dependencies]
+# Web framework
+axum = "0.8.8"
+axum-extra = { version = "0.12.5", features = ["cookie"] }
+tower = {version = "0.5.3", features = ["util", "limit"]}
+tower-http = { version = "0.6.8", features = ["cors", "trace", "fs"] }
+tower_governor = "0.8.0"
+time = "0.3"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "postgres", "any", "migrate", "chrono", "uuid"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_qs = "1.0.0"
+
+# Validation
+validator = { version = "0.20.0", features = ["derive"] }
+
+# Password hashing
+argon2 = "0.5"
+rand_core = "0.10.0"
+rand_crypto = { version = "=0.10.0", package = "rand"}
+rand = "0.9.2"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Email
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder", "hostname"] }
+regex = "1"
+lazy_static = "1.4"
+
+# Scheduler
+tokio-cron-scheduler = "0.15.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+dotenvy = "0.15"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0.18"
+
+# Base64 encoding
+base64 = "0.22.1"
+
+# Image processing
+image = "0.25.9"
+
+#crypto
+aes-gcm = {version = "=0.11.0-rc.3", features = ["aes"]}
+ml-dsa = {version = "=0.1.0-rc.7", features = []}
+ml-kem = "=0.3.0-rc.2"
+
+[dev-dependencies]
+axum-test = "14.0"

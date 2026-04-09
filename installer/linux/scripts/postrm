@@ -1,0 +1,22 @@
+#!/bin/bash
+# Post-removal script for magnolia
+
+set -e
+
+if [ "$1" = "purge" ]; then
+ # Remove magnolia user and group
+ if getent passwd magnolia > /dev/null 2>&1; then
+ userdel magnolia
+ fi
+
+ if getent group magnolia > /dev/null 2>&1; then
+ groupdel magnolia
+ fi
+
+ # Remove configuration and data directories
+ rm -rf /etc/magnolia
+ rm -rf /var/lib/magnolia
+ rm -rf /var/log/magnolia
+
+ echo "magnolia configuration and data files removed."
+fi

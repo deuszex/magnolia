@@ -1,0 +1,83 @@
+#!/bin/bash
+# debconf configuration script for magnolia
+
+set -e
+
+. /usr/share/debconf/confmodule
+
+db_title "Magnolia Server Configuration"
+
+# Ask how the user wants to configure
+db_input high magnolia/setup-method || true
+db_go
+
+db_get magnolia/setup-method
+if [ "$RET" = "Import from .env file" ]; then
+ db_input high magnolia/env-file-path || true
+ db_go
+else
+ # Environment mode
+ db_input medium magnolia/environment || true
+ db_go
+
+ # Database
+ db_input high magnolia/database-url || true
+ db_go
+
+ # Network binding
+ db_input medium magnolia/server-host || true
+ db_input medium magnolia/server-port || true
+ db_go
+
+ # Public base URL
+ db_input medium magnolia/base-url || true
+ db_go
+
+ # CORS origin — defaults to BASE_URL but may differ
+ db_input medium magnolia/web-origin || true
+ db_go
+
+ # Local-only port (optional)
+ db_input low magnolia/local-port || true
+ db_go
+
+ # TURN server
+ db_input medium magnolia/turn-enabled || true
+ db_go
+
+ db_get magnolia/turn-enabled
+ if [ "$RET" = "true" ]; then
+ db_input high magnolia/turn-external-ip || true
+ db_input high magnolia/turn-secret || true
+ db_input medium magnolia/turn-listen-addr || true
+ db_input medium magnolia/turn-realm || true
+ db_go
+ fi
+
+ # SMTP (optional) — ask for host first
+ db_input low magnolia/smtp-host || true
+ db_go
+
+ db_get magnolia/smtp-host
+ if [ -n "$RET" ]; then
+ db_input low magnolia/smtp-port || true
+ db_input low magnolia/smtp-user || true
+ db_input low magnolia/smtp-password || true
+ db_input low magnolia/smtp-from || true
+ db_go
+ fi
+
+ # Admin notification email
+ db_input low magnolia/admin-email || true
+ db_go
+
+ # Initial admin account
+ db_input high magnolia/initial-admin-email || true
+ db_go
+
+ db_get magnolia/initial-admin-email
+ if [ -n "$RET" ]; then
+ db_input high magnolia/initial-admin-password || true
+ db_go
+ fi
+fi

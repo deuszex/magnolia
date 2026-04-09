@@ -1,0 +1,29 @@
+#!/bin/bash
+# Pre-removal script for magnolia
+#
+# $1 values:
+# remove = package is being removed
+# upgrade = being replaced by a newer version (don't stop service here)
+# deconfigure = being deconfigured to satisfy another package
+# failed-upgrade = upgrade failed, rolling back
+
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+ if systemctl is-active --quiet magnolia_server.service; then
+ systemctl stop magnolia_server.service
+ fi
+
+ if systemctl is-enabled --quiet magnolia_server.service; then
+ systemctl disable magnolia_server.service
+ fi
+
+ echo "magnolia service stopped and disabled."
+ echo "Configuration and data files have been preserved in:"
+ echo " - /etc/magnolia/"
+ echo " - /var/lib/magnolia/"
+ echo "Remove these manually if no longer needed."
+fi
+
+# On upgrade ($1 = upgrade), dpkg handles the service transition automatically
+# via systemd's replacement mechanism — no action needed here.

@@ -1,0 +1,208 @@
+#!/bin/bash
+# RPM %post scriptlet for magnolia
+#
+# $1 = 1  fresh install
+# $1 = 2  upgrade
+
+set -e
+
+# Always ensure system user/group and directories exist
+if ! getent group magnolia > /dev/null 2>&1; then
+    groupadd --system magnolia
+fi
+
+if ! getent passwd magnolia > /dev/null 2>&1; then
+    useradd --system --gid magnolia --shell /usr/sbin/nologin \
+        --home-dir /var/lib/magnolia --no-create-home magnolia
+fi
+
+mkdir -p /var/lib/magnolia/uploads/images
+mkdir -p /var/log/magnolia
+mkdir -p /etc/magnolia
+
+chown -R magnolia:magnolia /var/lib/magnolia
+chown -R magnolia:magnolia /var/log/magnolia
+chown root:magnolia /etc/magnolia
+chmod 750 /etc/magnolia
+
+if [ "$1" -eq 1 ]; then
+    # Fresh install: generate a config file with sensible defaults.
+    # RPM has no debconf equivalent, so we write a pre-filled template and
+    # tell the user to review it before starting the service.
+
+    cat > /etc/magnolia/magnolia.env << EOF
+# Magnolia Server Configuration
+# Generated at install time — edit as needed, then enable and start:
+#
+#   sudo systemctl enable --now magnolia_server
+#
+# After changing this file, restart the service:
+#   sudo systemctl restart magnolia_server
+
+# Application environment (production / development)
+ENV=production
+
+# Database connection URL
+# SQLite: sqlite:///var/lib/magnolia/magnolia.db
+# PostgreSQL: postgres://user:password@localhost/magnolia
+DATABASE_URL=sqlite:///var/lib/magnolia/magnolia.db
+
+# Server binding
+HOST=0.0.0.0
+PORT=3000
+
+# Optional: open a second listener on localhost only (secure without TLS)
+# LOCAL_PORT=3001
+
+# Public base URL — UPDATE THIS to your domain before starting
+# Example: https://magnolia.example.com
+BASE_URL=http://localhost:3000
+
+# CORS allowed origin — must match the URL used in the browser.
+# Usually identical to BASE_URL. The server panics on startup if this is missing.
+# UPDATE THIS along with BASE_URL.
+WEB_ORIGIN=http://localhost:3000
+
+# How many days a login session lasts (default: 7)
+# SESSION_DURATION_DAYS=7
+
+# Logging
+# LOG_FORMAT=pretty          # "pretty" for human-readable; default is JSON
+# LOG_OUTPUT=stdout          # "file", "both", or "stdout" (default)
+# LOG_FILE_PATH=/var/log/magnolia/magnolia.log
+# LOG_INCLUDE_SOURCE=false   # "true" or "1" to include source file positions
+
+# Rate limiting
+# RATE_LIMIT_GLOBAL=100      # max requests per IP per window
+# RATE_LIMIT_AUTH=5          # max failed login attempts per IP per window
+# TRUSTED_PROXY=             # IP of your reverse proxy for X-Forwarded-For
+
+# SMTP — leave commented to disable email features
+# SMTP_HOST=smtp.example.com
+# SMTP_PORT=587
+# SMTP_USERNAME=user@example.com
+# SMTP_PASSWORD=your-password
+# SMTP_FROM=noreply@example.com
+
+# Encryption at rest (optional — 64 hex chars = 32-byte AES-256 key)
+# Generate with: openssl rand -hex 32
+# ENCRYPTION_AT_REST_KEY=
+
+# TURN server — disabled by default.
+# To enable, set all four values and restart the service.
+# SESSION_SECRET must be a random hex string (openssl rand -hex 32).
+# TURN_ENABLED=true
+# TURN_LISTEN_ADDR=0.0.0.0:3478
+# TURN_REALM=magnolia
+# TURN_EXTERNAL_IP=
+# SESSION_SECRET=
+EOF
+
+    chown root:magnolia /etc/magnolia/magnolia.env
+    chmod 640 /etc/magnolia/magnolia.env
+
+    systemctl daemon-reload
+    systemctl enable magnolia_server.service
+
+    # Generate nginx reverse-proxy config if nginx is installed
+    _PORT=$(grep "^PORT=" /etc/magnolia/magnolia.env | cut -d= -f2- | tr -d '"')
+    _PORT="${_PORT:-3000}"
+    _BASE_URL=$(grep "^BASE_URL=" /etc/magnolia/magnolia.env | cut -d= -f2- | tr -d '"')
+    _DOMAIN=$(echo "$_BASE_URL" | sed -E 's|^https?://||' | sed 's|/.*||')
+
+    if [ -n "$_DOMAIN" ] && command -v nginx > /dev/null 2>&1; then
+        mkdir -p /etc/nginx/sites-available
+        cat > /etc/nginx/sites-available/magnolia << NGINX_CONF
+# Magnolia reverse-proxy configuration
+# Generated at install time — review and adjust SSL paths before enabling.
+#
+# To enable:
+#   ln -s /etc/nginx/sites-available/magnolia /etc/nginx/sites-enabled/magnolia
+#   nginx -t && systemctl reload nginx
+
+# HTTP → HTTPS redirect
+server {
+    listen 80;
+    server_name ${_DOMAIN};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name ${_DOMAIN};
+
+    # SSL — update these paths to your certificate files
+    ssl_certificate /etc/ssl/certs/${_DOMAIN}.crt;
+    ssl_certificate_key /etc/ssl/private/${_DOMAIN}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # Upload limits (must be >= server's body limit, currently 50 MB)
+    client_max_body_size 100m;
+
+    # Timeouts for large uploads / long-lived connections
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_connect_timeout 10s;
+
+    location / {
+        proxy_pass http://127.0.0.1:${_PORT};
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        # WebSocket upgrade (required for /api/ws)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+NGINX_CONF
+        echo "nginx config written to /etc/nginx/sites-available/magnolia"
+        echo "Review it (update SSL cert paths), then enable with:"
+        echo "  ln -s /etc/nginx/sites-available/magnolia /etc/nginx/sites-enabled/magnolia"
+        echo "  nginx -t && systemctl reload nginx"
+    fi
+
+    echo ""
+    echo "============================================"
+    echo " Magnolia Server Installation Complete"
+    echo "============================================"
+    echo ""
+    echo "NEXT STEPS:"
+    echo ""
+    echo "1. Edit the configuration file:"
+    echo "   sudo nano /etc/magnolia/magnolia.env"
+    echo "   — set BASE_URL and WEB_ORIGIN to your domain"
+    echo "   — configure SMTP if you need email features"
+    echo ""
+    echo "2. Enable and start the service:"
+    echo "   sudo systemctl enable --now magnolia_server"
+    echo ""
+    echo "3. Create the initial administrator account:"
+    echo "   sudo magnolia-create-admin --email admin@example.com"
+    echo "   (you will be prompted for a password)"
+    echo ""
+    echo "4. Open http://localhost:3000 in your browser"
+    echo ""
+    echo "Configuration: /etc/magnolia/magnolia.env"
+    echo "Data:          /var/lib/magnolia"
+    echo "Logs:          journalctl -u magnolia_server"
+    echo ""
+
+elif [ "$1" -ge 2 ]; then
+    # Upgrade: preserve existing config, just reload and restart
+    systemctl daemon-reload
+    systemctl restart magnolia_server.service
+
+    echo ""
+    echo "============================================"
+    echo " magnolia upgraded successfully"
+    echo "============================================"
+    echo ""
+    echo "Existing configuration preserved at /etc/magnolia/magnolia.env"
+    echo "Service restarted. View logs: journalctl -u magnolia_server"
+    echo ""
+fi

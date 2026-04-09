@@ -1,0 +1,325 @@
+#!/bin/bash
+# Post-installation script for magnolia
+#
+# $1 values:
+# configure + $2 empty = fresh install
+# configure + $2 set = upgrade (old version in $2)
+# abort-upgrade = rollback after failed upgrade
+
+set -e
+
+# Always ensure system user/group and directories exist
+if ! getent group magnolia > /dev/null 2>&1; then
+ groupadd --system magnolia
+fi
+
+if ! getent passwd magnolia > /dev/null 2>&1; then
+ useradd --system --gid magnolia --shell /usr/sbin/nologin \
+ --home-dir /var/lib/magnolia --no-create-home magnolia
+fi
+
+mkdir -p /var/lib/magnolia
+mkdir -p /var/lib/magnolia/uploads/images
+mkdir -p /var/log/magnolia
+mkdir -p /etc/magnolia
+
+chown -R magnolia:magnolia /var/lib/magnolia
+chown -R magnolia:magnolia /var/log/magnolia
+chown root:magnolia /etc/magnolia
+chmod 750 /etc/magnolia
+
+if [ "$1" = "configure" ] && [ -z "$2" ]; then
+ #  Fresh install: run debconf wizard and generate config 
+
+ . /usr/share/debconf/confmodule
+
+ db_get magnolia/setup-method
+ SETUP_METHOD="$RET"
+
+ if [ "$SETUP_METHOD" = "Import from .env file" ]; then
+ db_get magnolia/env-file-path
+ SOURCE_ENV="$RET"
+
+ if [ -z "$SOURCE_ENV" ]; then
+ echo "ERROR: No .env file path provided." >&2
+ exit 1
+ fi
+
+ if [ ! -f "$SOURCE_ENV" ]; then
+ echo "ERROR: .env file not found: $SOURCE_ENV" >&2
+ exit 1
+ fi
+
+ cp "$SOURCE_ENV" /etc/magnolia/magnolia.env
+
+ # Ensure WEB_ORIGIN is present (server panics on startup without it)
+ if ! grep -q "^WEB_ORIGIN=" /etc/magnolia/magnolia.env; then
+ BASE_URL_VAL=$(grep "^BASE_URL=" /etc/magnolia/magnolia.env | cut -d= -f2-)
+ WEB_ORIGIN_VAL="${BASE_URL_VAL:-http://localhost:3000}"
+ echo "" >> /etc/magnolia/magnolia.env
+ echo "# CORS allowed origin (must match the URL used in the browser)" >> /etc/magnolia/magnolia.env
+ echo "WEB_ORIGIN=${WEB_ORIGIN_VAL}" >> /etc/magnolia/magnolia.env
+ fi
+
+ # If TURN is enabled in the imported file, ensure SESSION_SECRET is present
+ if grep -q "^TURN_ENABLED=true" /etc/magnolia/magnolia.env; then
+ if ! grep -q "^SESSION_SECRET=" /etc/magnolia/magnolia.env; then
+ SESSION_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
+ echo "" >> /etc/magnolia/magnolia.env
+ echo "# TURN credential signing key (auto-generated)" >> /etc/magnolia/magnolia.env
+ echo "SESSION_SECRET=${SESSION_SECRET}" >> /etc/magnolia/magnolia.env
+ fi
+ fi
+
+ else
+ # Manual setup: build .env from debconf answers
+ db_get magnolia/environment; APP_ENV="$RET"
+ db_get magnolia/database-url; DATABASE_URL="$RET"
+ db_get magnolia/server-host; SERVER_HOST="$RET"
+ db_get magnolia/server-port; SERVER_PORT="$RET"
+ db_get magnolia/base-url; BASE_URL="$RET"
+ db_get magnolia/web-origin; WEB_ORIGIN="$RET"
+ db_get magnolia/local-port; LOCAL_PORT="$RET"
+ db_get magnolia/smtp-host; SMTP_HOST="$RET"
+ db_get magnolia/smtp-port; SMTP_PORT="$RET"
+ db_get magnolia/smtp-user; SMTP_USER="$RET"
+ db_get magnolia/smtp-password; SMTP_PASSWORD="$RET"
+ db_get magnolia/smtp-from; SMTP_FROM="$RET"
+ db_get magnolia/admin-email; ADMIN_EMAIL="$RET"
+ db_get magnolia/initial-admin-email; INITIAL_ADMIN_EMAIL="$RET"
+ db_get magnolia/initial-admin-password; INITIAL_ADMIN_PASSWORD="$RET"
+
+ # Fall back: if WEB_ORIGIN was left blank, mirror BASE_URL
+ WEB_ORIGIN="${WEB_ORIGIN:-$BASE_URL}"
+
+ db_get magnolia/turn-enabled; TURN_ENABLED="$RET"
+ db_get magnolia/turn-external-ip; TURN_EXTERNAL_IP="$RET"
+ db_get magnolia/turn-secret; TURN_SECRET="$RET"
+ db_get magnolia/turn-listen-addr; TURN_LISTEN_ADDR="${RET:-0.0.0.0:3478}"
+ db_get magnolia/turn-realm; TURN_REALM="${RET:-magnolia}"
+
+ # Auto-generate TURN secret if user left it blank
+ if [ "$TURN_ENABLED" = "true" ] && [ -z "$TURN_SECRET" ]; then
+ TURN_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
+ fi
+
+ cat > /etc/magnolia/magnolia.env << EOF
+# Magnolia Server Configuration
+# Generated during installation — edit as needed, then restart the service:
+#   sudo systemctl restart magnolia_server
+
+# Application environment (production / development)
+ENV=${APP_ENV}
+
+# Database connection URL
+# SQLite: sqlite:///var/lib/magnolia/magnolia.db
+# PostgreSQL: postgres://user:password@localhost/magnolia
+DATABASE_URL=${DATABASE_URL}
+
+# Server binding
+HOST=${SERVER_HOST}
+PORT=${SERVER_PORT}
+
+# Optional: open a second listener on localhost only (secure without TLS)
+$([ -n "$LOCAL_PORT" ] && echo "LOCAL_PORT=${LOCAL_PORT}" || echo "# LOCAL_PORT=3001")
+
+# Public base URL — used for email links, redirects, and federation
+BASE_URL=${BASE_URL}
+
+# CORS allowed origin — must match the URL used in the browser.
+# Usually identical to BASE_URL. The server panics on startup if missing.
+WEB_ORIGIN=${WEB_ORIGIN}
+
+# How many days a login session lasts (default: 7)
+# SESSION_DURATION_DAYS=7
+
+# Logging
+# LOG_FORMAT=pretty          # "pretty" for human-readable; default is JSON
+# LOG_OUTPUT=stdout          # "file", "both", or "stdout" (default)
+# LOG_FILE_PATH=/var/log/magnolia/magnolia.log
+# LOG_INCLUDE_SOURCE=false   # "true" or "1" to include source file positions
+
+# Rate limiting
+# RATE_LIMIT_GLOBAL=100      # max requests per IP per window
+# RATE_LIMIT_AUTH=5          # max failed login attempts per IP per window
+# TRUSTED_PROXY=             # IP of your reverse proxy for X-Forwarded-For
+EOF
+
+ if [ -n "$SMTP_HOST" ]; then
+ cat >> /etc/magnolia/magnolia.env << EOF
+
+# SMTP configuration
+SMTP_HOST=${SMTP_HOST}
+SMTP_PORT=${SMTP_PORT}
+EOF
+ [ -n "$SMTP_USER" ] && echo "SMTP_USERNAME=${SMTP_USER}" >> /etc/magnolia/magnolia.env
+ [ -n "$SMTP_PASSWORD" ] && echo "SMTP_PASSWORD=${SMTP_PASSWORD}" >> /etc/magnolia/magnolia.env
+ [ -n "$SMTP_FROM" ] && echo "SMTP_FROM=${SMTP_FROM}" >> /etc/magnolia/magnolia.env
+ else
+ cat >> /etc/magnolia/magnolia.env << 'EOF'
+
+# SMTP — leave commented to disable email features
+# SMTP_HOST=smtp.example.com
+# SMTP_PORT=587
+# SMTP_USERNAME=user@example.com
+# SMTP_PASSWORD=your-password
+# SMTP_FROM=noreply@example.com
+EOF
+ fi
+
+ cat >> /etc/magnolia/magnolia.env << 'EOF'
+
+# Encryption at rest (optional — 64 hex chars = 32-byte AES-256 key)
+# Generate with: openssl rand -hex 32
+# ENCRYPTION_AT_REST_KEY=
+EOF
+
+ if [ "$TURN_ENABLED" = "true" ]; then
+ cat >> /etc/magnolia/magnolia.env << EOF
+
+# TURN server — relay for voice/video calls through NAT/firewalls
+TURN_ENABLED=true
+TURN_LISTEN_ADDR=${TURN_LISTEN_ADDR}
+TURN_REALM=${TURN_REALM}
+TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP}
+SESSION_SECRET=${TURN_SECRET}
+EOF
+ else
+ cat >> /etc/magnolia/magnolia.env << 'EOF'
+
+# TURN server (disabled — uncomment and set all values to enable)
+# TURN_ENABLED=true
+# TURN_LISTEN_ADDR=0.0.0.0:3478
+# TURN_REALM=magnolia
+# TURN_EXTERNAL_IP=
+# SESSION_SECRET=   # generate with: openssl rand -hex 32
+EOF
+ fi
+
+ # Clear password from debconf immediately
+ db_set magnolia/initial-admin-password "" || true
+ fi
+
+ chown root:magnolia /etc/magnolia/magnolia.env
+ chmod 640 /etc/magnolia/magnolia.env
+
+ db_purge
+
+ systemctl daemon-reload
+ systemctl enable magnolia_server.service
+
+ # Create initial admin account BEFORE starting the service.
+ # create_admin runs migrations and creates the DB file as root here.
+ # We fix ownership immediately after so the service (magnolia user) can write.
+ if [ -n "$INITIAL_ADMIN_EMAIL" ] && [ -n "$INITIAL_ADMIN_PASSWORD" ]; then
+ echo "Creating initial admin account: $INITIAL_ADMIN_EMAIL"
+ set -a; . /etc/magnolia/magnolia.env; set +a
+ printf '%s' "$INITIAL_ADMIN_PASSWORD" | \
+ /usr/local/bin/magnolia-create-admin --email "$INITIAL_ADMIN_EMAIL" --password-stdin || true
+ fi
+
+ # Fix ownership on any DB/WAL files created above before the service starts
+ chown -R magnolia:magnolia /var/lib/magnolia
+
+ systemctl start magnolia_server.service
+
+ #  Generate nginx reverse-proxy config 
+ # Extract domain and port from the env file we just wrote.
+ _BASE_URL=$(grep "^BASE_URL=" /etc/magnolia/magnolia.env 2>/dev/null | cut -d= -f2- | tr -d '"')
+ _PORT=$(grep "^PORT=" /etc/magnolia/magnolia.env 2>/dev/null | cut -d= -f2- | tr -d '"')
+ _PORT="${_PORT:-3000}"
+
+ # Strip protocol to get the bare domain (e.g. https://example.com → example.com)
+ _DOMAIN=$(echo "$_BASE_URL" | sed -E 's|^https?://||' | sed 's|/.*||')
+
+ if [ -n "$_DOMAIN" ] && command -v nginx > /dev/null 2>&1; then
+ mkdir -p /etc/nginx/sites-available
+ cat > /etc/nginx/sites-available/magnolia << NGINX_CONF
+# Magnolia reverse-proxy configuration
+# Generated at install time — review and adjust SSL paths before enabling.
+#
+# To enable:
+# ln -s /etc/nginx/sites-available/magnolia /etc/nginx/sites-enabled/magnolia
+# nginx -t && systemctl reload nginx
+
+# HTTP → HTTPS redirect
+server {
+ listen 80;
+ server_name ${_DOMAIN};
+ return 301 https://\$host\$request_uri;
+}
+
+server {
+ listen 443 ssl;
+ server_name ${_DOMAIN};
+
+ #  SSL  update these paths to your certificate files 
+ ssl_certificate /etc/ssl/certs/${_DOMAIN}.crt;
+ ssl_certificate_key /etc/ssl/private/${_DOMAIN}.key;
+ ssl_protocols TLSv1.2 TLSv1.3;
+ ssl_ciphers HIGH:!aNULL:!MD5;
+
+ #  Upload limits 
+ # Must be at least as large as the server's body limit (50 MB).
+ # Increase this if you raise DefaultBodyLimit in routes.rs.
+ client_max_body_size 100m;
+
+ #  Timeouts for large uploads / long-lived connections 
+ proxy_read_timeout 300s;
+ proxy_send_timeout 300s;
+ proxy_connect_timeout 10s;
+
+ location / {
+ proxy_pass http://127.0.0.1:${_PORT};
+
+ proxy_set_header Host \$host;
+ proxy_set_header X-Real-IP \$remote_addr;
+ proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+ proxy_set_header X-Forwarded-Proto \$scheme;
+
+ #  WebSocket upgrade (required for /api/ws) 
+ proxy_http_version 1.1;
+ proxy_set_header Upgrade \$http_upgrade;
+ proxy_set_header Connection "upgrade";
+ }
+}
+NGINX_CONF
+ echo "nginx config written to /etc/nginx/sites-available/magnolia"
+ echo "Review it (update SSL cert paths), then enable with:"
+ echo " ln -s /etc/nginx/sites-available/magnolia /etc/nginx/sites-enabled/magnolia"
+ echo " nginx -t && systemctl reload nginx"
+ fi
+
+ echo ""
+ echo "============================================"
+ echo " Magnolia Server Installation Complete"
+ echo "============================================"
+ echo ""
+ echo "Configuration file: /etc/magnolia/magnolia.env"
+ echo "Data directory: /var/lib/magnolia"
+ echo "View logs: journalctl -u magnolia_server"
+ echo "Service status: systemctl status magnolia_server"
+ echo ""
+ echo "IMPORTANT — if you are running behind nginx, make sure"
+ echo "client_max_body_size is at least 100m in your nginx config."
+ echo "(A generated config is at /etc/nginx/sites-available/magnolia)"
+ echo ""
+
+elif [ "$1" = "configure" ] && [ -n "$2" ]; then
+ #  Upgrade: preserve existing config, just restart the service 
+
+ systemctl daemon-reload
+ systemctl restart magnolia_server.service
+
+ echo ""
+ echo "============================================"
+ echo " magnolia upgraded from $2"
+ echo "============================================"
+ echo ""
+ echo "Existing configuration preserved at /etc/magnolia/magnolia.env"
+ echo "Service restarted. View logs: journalctl -u magnolia_server"
+ echo ""
+ echo "Reminder: nginx must have 'client_max_body_size 100m' (or larger)"
+ echo "in your server block for file uploads to work correctly."
+ echo ""
+fi

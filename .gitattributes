@@ -1,0 +1,20 @@
+# Default: normalize line endings to LF in the repository
+* text=auto eol=lf
+
+# Shell scripts must always be LF — CRLF breaks the shebang on Linux
+installer/linux/scripts/postinst text eol=lf
+installer/linux/scripts/prerm text eol=lf
+installer/linux/scripts/postrm text eol=lf
+installer/linux/scripts/config text eol=lf
+installer/linux/cross-build.sh text eol=lf
+installer/linux/build.sh text eol=lf
+
+# Windows batch files use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files — no line ending conversion
+*.deb binary
+*.exe binary
+*.dll binary
+*.so binary

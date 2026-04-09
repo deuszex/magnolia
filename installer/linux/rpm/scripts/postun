@@ -1,0 +1,26 @@
+#!/bin/bash
+# RPM %postun scriptlet for magnolia
+#
+# $1 = 0  package fully removed
+# $1 = 1  upgrade (new package already installed — do nothing here)
+
+set -e
+
+if [ "$1" -eq 0 ]; then
+    # Full removal: remove user, group, and all data directories
+    if getent passwd magnolia > /dev/null 2>&1; then
+        userdel magnolia
+    fi
+
+    if getent group magnolia > /dev/null 2>&1; then
+        groupdel magnolia
+    fi
+
+    rm -rf /etc/magnolia
+    rm -rf /var/lib/magnolia
+    rm -rf /var/log/magnolia
+
+    systemctl daemon-reload
+
+    echo "magnolia configuration and data files removed."
+fi

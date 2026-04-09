@@ -1,0 +1,27 @@
+#!/bin/bash
+# RPM %preun scriptlet for magnolia
+#
+# $1 = 0  package is being fully removed (not an upgrade)
+# $1 = 1  package is being upgraded (new version already installed — don't stop)
+
+set -e
+
+if [ "$1" -eq 0 ]; then
+    # Full removal: stop and disable the service
+    if systemctl is-active --quiet magnolia_server.service; then
+        systemctl stop magnolia_server.service
+    fi
+
+    if systemctl is-enabled --quiet magnolia_server.service; then
+        systemctl disable magnolia_server.service
+    fi
+
+    echo "magnolia service stopped and disabled."
+    echo "Configuration and data files have been preserved in:"
+    echo "  /etc/magnolia/"
+    echo "  /var/lib/magnolia/"
+    echo "Remove these manually if no longer needed."
+fi
+
+# On upgrade ($1 = 1), systemd handles the service transition automatically —
+# the new package's %post scriptlet will restart it.

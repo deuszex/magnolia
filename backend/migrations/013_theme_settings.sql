@@ -1,0 +1,32 @@
+CREATE TABLE IF NOT EXISTS theme_settings (
+    setting_id INTEGER PRIMARY KEY CHECK (setting_id = 1),
+    site_style TEXT NOT NULL DEFAULT 'modern',
+    color_background TEXT NOT NULL DEFAULT '#940000',
+    color_main TEXT NOT NULL DEFAULT '#1a1a2e',
+    color_accent TEXT NOT NULL DEFAULT '#b38219',
+    color_button TEXT NOT NULL DEFAULT '#2563eb',
+    color_button_hover TEXT NOT NULL DEFAULT '#1d4ed8',
+    color_status_ready TEXT NOT NULL DEFAULT '#22c55e',
+    color_status_pending TEXT NOT NULL DEFAULT '#f59e0b',
+    color_status_removed TEXT NOT NULL DEFAULT '#ef4444',
+    background_image TEXT,
+    banner_top_left_image TEXT,
+    banner_top_left_link TEXT,
+    banner_bottom_left_image TEXT,
+    banner_bottom_left_link TEXT,
+    banner_top_right_image TEXT,
+    banner_top_right_link TEXT,
+    banner_bottom_right_image TEXT,
+    banner_bottom_right_link TEXT,
+    site_title TEXT NOT NULL DEFAULT 'Magnolia',
+    brand_icon TEXT NOT NULL DEFAULT '',
+    brand_text TEXT NOT NULL DEFAULT 'Magnolia',
+    favicon_data TEXT,
+    hero_title TEXT NOT NULL DEFAULT 'Welcome',
+    hero_subtitle TEXT,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active = 1)
+);
+
+INSERT OR IGNORE INTO theme_settings (setting_id, updated_at) VALUES (1, datetime('now'));

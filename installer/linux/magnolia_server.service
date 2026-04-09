@@ -1,0 +1,48 @@
+[Unit]
+Description=Magnolia Anti-Social Community Platform
+Documentation=https://github.com/your-org/magnolia
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=magnolia
+Group=magnolia
+
+# Working directory where config and data files are stored
+WorkingDirectory=/var/lib/magnolia
+
+# Main executable
+ExecStart=/usr/local/bin/magnolia_server
+
+# Environment configuration
+EnvironmentFile=-/etc/magnolia/magnolia.env
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/magnolia /var/log/magnolia
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=magnolia
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,193 @@
+Template: magnolia/setup-method
+Type: select
+Choices: Configure manually, Import from .env file
+Default: Configure manually
+Description: Installation setup method
+ Choose how to configure magnolia.
+ .
+ "Configure manually" will ask a series of questions.
+ .
+ "Import from .env file" will copy an existing environment file directly.
+ Useful for reinstalls or migrating from another server.
+
+Template: magnolia/env-file-path
+Type: string
+Default:
+Description: Path to existing .env file
+ Enter the absolute path to an existing magnolia .env file to import.
+ .
+ The file will be copied to /etc/magnolia/magnolia.env.
+ A SESSION_SECRET will be added automatically if one is not present.
+ .
+ Example: /home/deploy/magnolia.env
+
+Template: magnolia/environment
+Type: select
+Choices: production, development
+Default: production
+Description: Application environment
+ Choose the runtime environment for magnolia.
+ .
+ "production" enables stricter security settings and reduced logging.
+ "development" enables verbose logging and relaxed settings.
+
+Template: magnolia/database-url
+Type: string
+Default: sqlite:///var/lib/magnolia/magnolia.db
+Description: Database connection URL
+ Enter the database connection URL for magnolia.
+ .
+ For SQLite (default): sqlite:///var/lib/magnolia/magnolia.db
+ For PostgreSQL: postgres://user:password@localhost/magnolia
+
+Template: magnolia/server-host
+Type: string
+Default: 0.0.0.0
+Description: Server bind address
+ Enter the IP address the server should listen on.
+ .
+ Use 0.0.0.0 to listen on all interfaces (typical with a reverse proxy).
+ Use 127.0.0.1 for local-only access.
+
+Template: magnolia/server-port
+Type: string
+Default: 3000
+Description: Server port
+ Enter the port number for the web server.
+
+Template: magnolia/base-url
+Type: string
+Default: http://localhost:3000
+Description: Public base URL
+ Enter the public URL where magnolia will be reachable.
+ Used for absolute links in emails, redirects, and password-reset links.
+ .
+ Example: https://magnolia.example.com
+
+Template: magnolia/web-origin
+Type: string
+Default: http://localhost:3000
+Description: CORS allowed origin (WEB_ORIGIN)
+ Enter the browser-facing origin that the server will accept requests from.
+ This is the URL users actually type into their browser.
+ .
+ In most setups this is identical to BASE_URL. It may differ if your
+ reverse proxy rewrites the scheme (e.g. BASE_URL is https but you
+ proxy internally over http).
+ .
+ The server will panic on startup if this value is missing.
+ .
+ Example: https://magnolia.example.com
+
+Template: magnolia/turn-enabled
+Type: boolean
+Default: false
+Description: Enable embedded TURN server?
+ A TURN server relays voice and video call traffic for users behind restrictive
+ NAT or firewalls who cannot establish a direct peer-to-peer connection.
+ .
+ If you answer yes, you will be asked for the required TURN settings.
+ You can enable TURN later by editing /etc/magnolia/magnolia.env.
+
+Template: magnolia/turn-external-ip
+Type: string
+Default:
+Description: TURN server external IP address
+ Enter the public IP address where the TURN server will be reachable.
+ This is the IP that remote clients will connect to for media relay.
+ .
+ Example: 203.0.113.42
+
+Template: magnolia/turn-secret
+Type: password
+Default:
+Description: TURN credential signing secret (SESSION_SECRET)
+ Enter a random secret used to sign time-limited TURN credentials.
+ This must be the same value on all servers sharing this TURN instance.
+ .
+ Leave blank to auto-generate a secure random value.
+
+Template: magnolia/turn-listen-addr
+Type: string
+Default: 0.0.0.0:3478
+Description: TURN server listen address
+ Address and port the TURN server will bind to locally.
+ Usually 0.0.0.0:3478 (all interfaces, standard TURN port).
+
+Template: magnolia/turn-realm
+Type: string
+Default: magnolia
+Description: TURN realm
+ The realm string sent to TURN clients during authentication.
+ The default value is fine for most setups.
+
+Template: magnolia/local-port
+Type: string
+Default:
+Description: Local-only port (LOCAL_PORT) — optional
+ If set, the server opens a second listener on localhost bound to this port.
+ Traffic through localhost never travels over the network so it is always
+ secure without TLS, even when the public port is not using HTTPS.
+ .
+ Leave empty to disable the local-only listener.
+ .
+ Example: 3001
+
+Template: magnolia/smtp-host
+Type: string
+Default:
+Description: SMTP server hostname (optional)
+ Enter the SMTP server hostname for outgoing emails.
+ Leave empty to disable email sending.
+
+Template: magnolia/smtp-port
+Type: string
+Default: 587
+Description: SMTP server port
+ 587 for STARTTLS (recommended), 465 for implicit TLS, 25 for plain.
+
+Template: magnolia/smtp-user
+Type: string
+Default:
+Description: SMTP username (optional)
+ Enter the username for SMTP authentication.
+ Leave empty if your SMTP server does not require authentication.
+
+Template: magnolia/smtp-password
+Type: password
+Default:
+Description: SMTP password (optional)
+ Enter the password for SMTP authentication.
+ Leave empty if your SMTP server does not require authentication.
+
+Template: magnolia/smtp-from
+Type: string
+Default:
+Description: Sender email address (optional)
+ Enter the email address shown as the sender for outgoing emails.
+ Example: noreply@example.com
+
+Template: magnolia/admin-email
+Type: string
+Default:
+Description: Admin notification email (optional)
+ Enter an email address for admin alerts (security events, errors).
+ Leave empty to disable admin notifications.
+
+Template: magnolia/initial-admin-email
+Type: string
+Default:
+Description: Initial administrator account email
+ Enter the email address for the first administrator account.
+ This account will have full access to the admin panel.
+ .
+ Leave empty to skip — you can create an admin account later
+ by running: magnolia-create-admin --email <email>
+
+Template: magnolia/initial-admin-password
+Type: password
+Default:
+Description: Initial administrator account password
+ Enter a password for the first administrator account.
+ .
+ The password must be at least 8 characters long.

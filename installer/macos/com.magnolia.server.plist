@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+ <key>Label</key>
+ <string>com.magnolia.server</string>
+
+ <!-- The launcher script sources /usr/local/etc/magnolia/magnolia.env before exec-ing the server.
+ Edit that file to change configuration, then reload:
+ sudo launchctl unload /Library/LaunchDaemons/com.magnolia.server.plist
+ sudo launchctl load /Library/LaunchDaemons/com.magnolia.server.plist -->
+ <key>ProgramArguments</key>
+ <array>
+ <string>/usr/local/bin/magnolia-launcher</string>
+ </array>
+
+ <key>WorkingDirectory</key>
+ <string>/usr/local/var/magnolia</string>
+
+ <!-- Start automatically at boot -->
+ <key>RunAtLoad</key>
+ <true/>
+
+ <!-- Restart on crash; do not restart on clean exit -->
+ <key>KeepAlive</key>
+ <dict>
+ <key>SuccessfulExit</key>
+ <false/>
+ <key>Crashed</key>
+ <true/>
+ </dict>
+
+ <!-- Wait 10 s between restart attempts to avoid tight crash loops -->
+ <key>ThrottleInterval</key>
+ <integer>10</integer>
+
+ <key>StandardOutPath</key>
+ <string>/usr/local/var/log/magnolia/magnolia.log</string>
+ <key>StandardErrorPath</key>
+ <string>/usr/local/var/log/magnolia/magnolia.err</string>
+
+ <!-- Raise the open-file limit for WebSocket-heavy workloads -->
+ <key>SoftResourceLimits</key>
+ <dict>
+ <key>NumberOfFiles</key>
+ <integer>65535</integer>
+ </dict>
+ <key>HardResourceLimits</key>
+ <dict>
+ <key>NumberOfFiles</key>
+ <integer>65535</integer>
+ </dict>
+
+ <key>ProcessType</key>
+ <string>Interactive</string>
+</dict>
+</plist>
