@@ -81,12 +81,23 @@ $BUILD_CMD build --release \
     --bin create_admin \
     $TARGET_ARGS
 
+# cargo-generate-rpm resolves asset source paths relative to backend/,
+# so Cargo.toml uses ../target/release/* (workspace root).
+# When cross-compiling, copy the binaries to the non-triple path.
+if [ -n "$TARGET" ]; then
+    echo "Staging cross-compiled binaries for packaging..."
+    mkdir -p "../target/release"
+    cp "../target/$TARGET/release/magnolia_server" "../target/release/magnolia_server"
+    cp "../target/$TARGET/release/service_ctl"     "../target/release/service_ctl"
+    cp "../target/$TARGET/release/create_admin"    "../target/release/create_admin"
+fi
+
 echo ""
 echo "Building .rpm package..."
-cargo generate-rpm --auto-req disabled $TARGET_ARGS
+cargo generate-rpm --auto-req disabled
 
 # Find the generated .rpm file
-RPM_FILE=$(find "$PROJECT_ROOT/target" -name "*.rpm" -type f | head -1)
+RPM_FILE=$(find "$PROJECT_ROOT/backend/target" -name "*.rpm" -type f | head -1)
 
 if [ -n "$RPM_FILE" ]; then
     cp "$RPM_FILE" "$SCRIPT_DIR/"

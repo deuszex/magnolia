@@ -80,4 +80,8 @@ else
  db_input high magnolia/initial-admin-password || true
  db_go
  fi
+
+ # Autostart
+ db_input medium magnolia/autostart || true
+ db_go
 fi

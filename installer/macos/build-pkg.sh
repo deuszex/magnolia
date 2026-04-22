@@ -174,7 +174,8 @@ ENVEOF
 
 chmod 600 "$CONF_FILE"
 
-# Load service (starts on next boot by default; load now too) 
+# Load the service once now so it starts immediately, but do NOT use -w
+# (which would permanently enable it). The user can enable autostart separately.
 launchctl load "$PLIST" 2>/dev/null || true
 
 echo ""
@@ -189,8 +190,8 @@ echo ""
 echo "NEXT STEPS:"
 echo ""
 echo "1. Edit $CONF_FILE"
-echo " — set BASE_URL and WEB_ORIGIN to your domain"
-echo " — configure SMTP if you need email features"
+echo ", set BASE_URL and WEB_ORIGIN to your domain"
+echo ", configure SMTP if you need email features"
 echo ""
 echo "2. Reload the service to apply your changes:"
 echo " sudo launchctl unload $PLIST"
@@ -218,7 +219,8 @@ cat > "$BUILD_DIR/resources/welcome.html" << 'EOF'
 <body>
  <h1>Magnolia Server</h1>
  <p>This installer will set up the magnolia self-hosted social platform on your Mac.</p>
- <p>The server will be configured to start automatically at boot.</p>
+ <p>The service will be installed but <strong>not started automatically</strong> at boot by default.
+ You can enable autostart after installation if you wish.</p>
  <h3>What will be installed:</h3>
  <ul>
  <li><code>/usr/local/bin/magnolia_server</code> — main server binary</li>
@@ -267,6 +269,13 @@ cat > "$BUILD_DIR/resources/conclusion.html" << 'EOF'
  <a href="http://localhost:3000">http://localhost:3000</a>
  </li>
  </ol>
+
+ <h3>Autostart at boot (optional)</h3>
+ <p>The service started once after installation but is <strong>not enabled to run at every boot</strong> by default.</p>
+ <ul>
+ <li>Enable autostart: <code>sudo launchctl load -w /Library/LaunchDaemons/com.magnolia.server.plist</code></li>
+ <li>Disable autostart: <code>sudo launchctl unload -w /Library/LaunchDaemons/com.magnolia.server.plist</code></li>
+ </ul>
 
  <h3>Useful commands</h3>
  <ul>

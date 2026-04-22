@@ -67,11 +67,20 @@ cargo zigbuild --release \
     --bin create_admin \
     --target "$TARGET"
 
+# cargo-generate-rpm resolves asset source paths relative to backend/,
+# so Cargo.toml uses ../target/release/* (workspace root).
+# Copy the cross-compiled binaries there so generate-rpm can find them.
+echo "Staging binaries for packaging..."
+mkdir -p "../target/release"
+cp "../target/$TARGET/release/magnolia_server" "../target/release/magnolia_server"
+cp "../target/$TARGET/release/service_ctl"     "../target/release/service_ctl"
+cp "../target/$TARGET/release/create_admin"    "../target/release/create_admin"
+
 echo ""
 echo "Building .rpm package..."
-cargo generate-rpm --auto-req disabled --target "$TARGET"
+cargo generate-rpm --auto-req disabled
 
-RPM_FILE=$(find "$PROJECT_ROOT/target" -name "*.rpm" -type f | head -1)
+RPM_FILE=$(find "$PROJECT_ROOT/backend/target" -name "*.rpm" -type f | head -1)
 
 if [ -n "$RPM_FILE" ]; then
     cp "$RPM_FILE" "$SCRIPT_DIR/"

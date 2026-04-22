@@ -131,13 +131,12 @@ name = "magnolia_server"
 license = "see LICENSE"
 summary = "Magnolia social platform server"
 description = "Self-hosted social media platform with messaging, calling, and media support."
-requires = [{ name = "systemd" }]
 post_install_script = "../installer/linux/rpm/scripts/post"
 pre_uninstall_script = "../installer/linux/rpm/scripts/preun"
 post_uninstall_script = "../installer/linux/rpm/scripts/postun"
 assets = [
- { source = "target/release/magnolia_server", dest = "/usr/local/bin/magnolia_server", mode = "755" },
- { source = "target/release/service_ctl", dest = "/usr/local/bin/magnolia_server-ctl", mode = "755" },
- { source = "target/release/create_admin", dest = "/usr/local/bin/magnolia-create-admin", mode = "755" },
+ { source = "../target/release/magnolia_server", dest = "/usr/local/bin/magnolia_server", mode = "755" },
+ { source = "../target/release/service_ctl", dest = "/usr/local/bin/magnolia_server-ctl", mode = "755" },
+ { source = "../target/release/create_admin", dest = "/usr/local/bin/magnolia-create-admin", mode = "755" },
  { source = "../installer/linux/magnolia_server.service", dest = "/usr/lib/systemd/system/magnolia_server.service", mode = "644" },
 ]

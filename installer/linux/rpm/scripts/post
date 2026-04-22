@@ -102,7 +102,15 @@ EOF
     chmod 640 /etc/magnolia/magnolia.env
 
     systemctl daemon-reload
-    systemctl enable magnolia_server.service
+
+    # Enable autostart if MAGNOLIA_AUTOSTART=1 was set at install time.
+    # Example: MAGNOLIA_AUTOSTART=1 rpm -i magnolia.rpm
+    if [ "${MAGNOLIA_AUTOSTART:-0}" = "1" ]; then
+        systemctl enable magnolia_server.service
+        echo "Autostart enabled."
+    else
+        echo "Autostart not enabled. To enable: sudo systemctl enable magnolia_server"
+    fi
 
     # Generate nginx reverse-proxy config if nginx is installed
     _PORT=$(grep "^PORT=" /etc/magnolia/magnolia.env | cut -d= -f2- | tr -d '"')
@@ -178,8 +186,14 @@ NGINX_CONF
     echo "   — set BASE_URL and WEB_ORIGIN to your domain"
     echo "   — configure SMTP if you need email features"
     echo ""
-    echo "2. Enable and start the service:"
-    echo "   sudo systemctl enable --now magnolia_server"
+    echo "2. Start the service:"
+    if [ "${MAGNOLIA_AUTOSTART:-0}" = "1" ]; then
+        echo "   sudo systemctl start magnolia_server"
+        echo "   (autostart is already enabled)"
+    else
+        echo "   sudo systemctl start magnolia_server"
+        echo "   To also enable autostart: sudo systemctl enable magnolia_server"
+    fi
     echo ""
     echo "3. Create the initial administrator account:"
     echo "   sudo magnolia-create-admin --email admin@example.com"

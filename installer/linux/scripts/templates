@@ -191,3 +191,14 @@ Description: Initial administrator account password
  Enter a password for the first administrator account.
  .
  The password must be at least 12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...).
+
+Template: magnolia/autostart
+Type: boolean
+Default: true
+Description: Start Magnolia Server automatically at boot?
+ If yes, the service will be enabled with systemd and start on every boot.
+ .
+ If no, the service will be installed but not enabled. Start it manually with:
+   sudo systemctl start magnolia_server
+ Enable autostart later with:
+   sudo systemctl enable magnolia_server

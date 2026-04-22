@@ -54,12 +54,21 @@ echo Building release binaries for %TARGET%...
 cargo zigbuild --release --bin magnolia_server --bin service_ctl --bin create_admin --target %TARGET%
 if errorlevel 1 goto fail
 
+:: cargo-generate-rpm resolves asset source paths relative to backend\,
+:: so Cargo.toml uses ..\target\release\* (workspace root).
+:: Copy the cross-compiled binaries there so generate-rpm can find them.
+echo Staging binaries for packaging...
+if not exist "..\target\release" mkdir "..\target\release"
+copy /y "..\target\%TARGET%\release\magnolia_server"   "..\target\release\magnolia_server"
+copy /y "..\target\%TARGET%\release\service_ctl"       "..\target\release\service_ctl"
+copy /y "..\target\%TARGET%\release\create_admin"      "..\target\release\create_admin"
+
 echo Building .rpm package...
-cargo generate-rpm --auto-req disabled --target %TARGET%
+cargo generate-rpm --auto-req disabled
 if errorlevel 1 goto fail
 
 popd
-for /r "%~dp0..\..\..\target" %%f in (*.rpm) do (
+for /r "%~dp0..\..\..\backend\target" %%f in (*.rpm) do (
     copy "%%f" "%~dp0"
     echo.
     echo Build complete: %~dp0%%~nxf

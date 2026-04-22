@@ -36,6 +36,11 @@ CloseApplicationsFilter=magnolia_server.exe
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+Name: "autostart";     Description: "Start {#MyAppName} automatically with Windows (recommended for servers)"; GroupDescription: "Startup:"; Flags: checkedonce
+Name: "desktopicon";   Description: "Create a shortcut on the &desktop";                                       GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: "startmenuicons"; Description: "Create shortcuts in the &Start Menu";                                    GroupDescription: "Shortcuts:"; Flags: checkedonce
+
 [Files]
 Source: "..\..\target\release\magnolia_server.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\target\release\service_ctl.exe"; DestDir: "{app}"; DestName: "magnolia_server-ctl.exe"; Flags: ignoreversion
@@ -346,11 +351,17 @@ begin
  '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
  Sleep(1500); // wait for SCM to remove the entry
 
- // Create service
+ // Create service (auto-start or manual depending on user choice)
+ if IsTaskSelected('autostart') then
  Exec(ExpandConstant('{sys}\sc.exe'),
- 'create {#ServiceName} binPath= "' + BinPath + '" start= auto ' +
- 'DisplayName= "Magnolia Server"',
- '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  'create {#ServiceName} binPath= "' + BinPath + '" start= auto ' +
+  'DisplayName= "Magnolia Server"',
+  '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+ else
+ Exec(ExpandConstant('{sys}\sc.exe'),
+  'create {#ServiceName} binPath= "' + BinPath + '" start= demand ' +
+  'DisplayName= "Magnolia Server"',
+  '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
  Exec(ExpandConstant('{sys}\sc.exe'),
  'description {#ServiceName} "magnolia — self-hosted social platform"',
@@ -453,6 +464,51 @@ begin
  Result := Trim(PageServer.Values[2]);
 end;
 
+// Create desktop and Start Menu shortcuts to the web interface
+procedure CreateShortcuts(const BaseUrl: String);
+var
+ UrlContent: String;
+ AppDir, GroupDir: String;
+ UrlFile: String;
+begin
+ AppDir := ExpandConstant('{app}');
+
+ // Write a .url Internet Shortcut file to the app directory
+ UrlFile := AppDir + '\Magnolia.url';
+ UrlContent := '[InternetShortcut]' + #13#10 + 'URL=' + BaseUrl + #13#10;
+ SaveStringToFile(UrlFile, UrlContent, False);
+
+ if IsTaskSelected('desktopicon') then
+ begin
+  SaveStringToFile(
+   ExpandConstant('{commondesktop}') + '\Magnolia Server.url',
+   UrlContent, False);
+ end;
+
+ if IsTaskSelected('startmenuicons') then
+ begin
+  GroupDir := ExpandConstant('{commonprograms}') + '\{#MyAppName}';
+  ForceDirectories(GroupDir);
+
+  // Web interface shortcut
+  SaveStringToFile(GroupDir + '\Open Magnolia.url', UrlContent, False);
+
+  // Data folder shortcut via explorer
+  CreateShellLink(
+   GroupDir + '\Magnolia Data Folder.lnk',
+   'Open Magnolia data folder',
+   ExpandConstant('{commonappdata}') + '\Magnolia',
+   '', '', '', 0, SW_SHOWNORMAL);
+
+  // Uninstall shortcut
+  CreateShellLink(
+   GroupDir + '\Uninstall Magnolia Server.lnk',
+   'Uninstall Magnolia Server',
+   ExpandConstant('{uninstallexe}'),
+   '', '', '', 0, SW_SHOWNORMAL);
+ end;
+end;
+
 // Main post-install logic
 procedure CurStepChanged(CurStep: TSetupStep);
 var
@@ -485,10 +541,11 @@ begin
  end
  else
  begin
- // Fresh install: write config, register service, start
+ // Fresh install: write config, register service, create shortcuts, start
  WriteEnvFile;
  RegisterService(AppDir);
  CreateAdminAccount(AppDir, DbUrl);
+ CreateShortcuts(Trim(PageServer.Values[0]));
 
  // Start the service
  Exec(ExpandConstant('{sys}\sc.exe'), 'start {#ServiceName}',
@@ -508,7 +565,10 @@ begin
  s := s + 'Service name: {#ServiceName}' + NewLine;
  s := s + 'Config file: ' + ExpandConstant('{commonappdata}') + '\Magnolia\magnolia.env' + NewLine;
  s := s + 'Data dir: ' + ExpandConstant('{commonappdata}') + '\Magnolia\' + NewLine + NewLine;
- s := s + 'The service will start automatically and on every boot.' + NewLine;
- s := s + 'After install: open http://localhost:' + PageServer.Values[2];
+ if IsTaskSelected('autostart') then
+  s := s + 'Service startup: automatic (starts with Windows)' + NewLine
+ else
+  s := s + 'Service startup: manual (start with: sc start {#ServiceName})' + NewLine;
+ s := s + 'After install: open ' + Trim(PageServer.Values[0]);
  Result := s;
 end;

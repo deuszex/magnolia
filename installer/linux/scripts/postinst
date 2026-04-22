@@ -203,10 +203,15 @@ EOF
  chown root:magnolia /etc/magnolia/magnolia.env
  chmod 640 /etc/magnolia/magnolia.env
 
+ db_get magnolia/autostart; AUTOSTART="$RET"
+
  db_purge
 
  systemctl daemon-reload
- systemctl enable magnolia_server.service
+
+ if [ "$AUTOSTART" = "true" ]; then
+  systemctl enable magnolia_server.service
+ fi
 
  # Create initial admin account BEFORE starting the service.
  # create_admin runs migrations and creates the DB file as root here.
@@ -299,6 +304,11 @@ NGINX_CONF
  echo "Data directory: /var/lib/magnolia"
  echo "View logs: journalctl -u magnolia_server"
  echo "Service status: systemctl status magnolia_server"
+ if [ "$AUTOSTART" = "true" ]; then
+  echo "Autostart: enabled (starts with system)"
+ else
+  echo "Autostart: disabled. To enable: sudo systemctl enable magnolia_server"
+ fi
  echo ""
  echo "IMPORTANT — if you are running behind nginx, make sure"
  echo "client_max_body_size is at least 100m in your nginx config."
