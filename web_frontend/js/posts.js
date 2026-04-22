@@ -131,13 +131,14 @@ var posts = (function () {
         }
 
         var authorAvatarHtml = (typeof profile !== 'undefined') ? profile.avatarHtml(authorAvatarUrl, authorName, 'sm') : '';
-
+        var draft = post.is_published ? "" : '<span>(Draft)</span>';
         card.innerHTML =
             '<div class="post-header">' +
             '<a class="post-author-link" href="#profile/' + escapeAttr(post.author_id) + '">' +
             authorAvatarHtml +
             '<span class="post-author">' + escapeHtml(authorName) + '</span>' +
             '</a>' +
+            draft +
             '<span class="post-time">' + time + '</span>' +
             actionsHtml +
             '</div>' +
@@ -1364,6 +1365,7 @@ var posts = (function () {
         initCreatePost: initCreatePost,
         initFeedTabs: initFeedTabs,
         renderSearchResults: renderSearchResults,
-        openLightbox: openLightbox
+        openLightbox: openLightbox,
+        renderPostCard: renderPostCard
     };
 })();

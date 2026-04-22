@@ -14,7 +14,7 @@ use validator::Validate;
 
 use crate::config::Settings;
 use crate::middleware::auth::{AuthMiddleware, OptionalAuth};
-use magnolia_common::errors::AppError;
+use crate::utils::encryption::{decrypt_text, encrypt_text};
 use magnolia_common::models::{Post, PostContent};
 use magnolia_common::repositories::post_repository::PostSearchParams;
 use magnolia_common::repositories::{
@@ -24,6 +24,7 @@ use magnolia_common::schemas::{
     CreatePostRequest, ListPostsQuery, PostContentResponse, PostListResponse, PostResponse,
     PostSummaryResponse, SearchPostsQuery, UpdatePostRequest,
 };
+use magnolia_common::{errors::AppError, repositories::CommentRepository};
 
 type AppState = (AnyPool, Arc<Settings>);
 
@@ -86,7 +87,7 @@ pub async fn create_post(
     let tags = payload.tags.clone();
 
     let repo = PostRepository::new(pool.clone());
-    let tag_repo = PostTagRepository::new(pool);
+    let tag_repo = PostTagRepository::new(pool.clone());
     let now = Utc::now().to_rfc3339();
     let post_id = Uuid::new_v4().to_string();
 
@@ -109,17 +110,25 @@ pub async fn create_post(
     for content_req in payload.contents {
         let content_id = Uuid::new_v4().to_string();
 
+        // Encrypt text content at rest; media content stores a media_id (no encryption needed)
+        let (stored_content, content_nonce) = if content_req.content_type == "text" {
+            encrypt_text(&settings, &pool, &content_req.content).await?
+        } else {
+            (content_req.content.clone(), None)
+        };
+
         let content = PostContent {
             content_id: content_id.clone(),
             post_id: post_id.clone(),
             content_type: content_req.content_type.clone(),
             display_order: content_req.display_order,
-            content: content_req.content.clone(),
+            content: stored_content,
             thumbnail_path: None,
             original_filename: content_req.filename.clone(),
             mime_type: content_req.mime_type.clone(),
             file_size: None,
             created_at: now.clone(),
+            content_nonce,
         };
 
         repo.add_content(&content).await.map_err(|e| {
@@ -132,7 +141,7 @@ pub async fn create_post(
             content_id,
             content_type: content_req.content_type,
             display_order: content_req.display_order,
-            content: content_req.content,
+            content: content_req.content, // return plaintext to caller
             thumbnail_url: thumb,
             filename: content_req.filename,
             mime_type: content_req.mime_type,
@@ -215,7 +224,7 @@ pub async fn create_post(
 /// Get a single post by ID
 /// GET /api/posts/:post_id
 pub async fn get_post(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     OptionalAuth(auth): OptionalAuth,
     Path(post_id): Path<String>,
 ) -> Result<Json<PostResponse>, AppError> {
@@ -240,24 +249,25 @@ pub async fn get_post(
         }
     }
 
-    // Build content responses (TODO: decrypt)
-    let content_responses: Vec<PostContentResponse> = post_data
-        .contents
-        .into_iter()
-        .map(|c| {
-            let thumb = content_thumbnail_url(&c.content_type, &c.content);
-            PostContentResponse {
-                content_id: c.content_id,
-                content_type: c.content_type,
-                display_order: c.display_order,
-                content: c.content,
-                thumbnail_url: thumb,
-                filename: c.original_filename,
-                mime_type: c.mime_type,
-                file_size: c.file_size,
-            }
-        })
-        .collect();
+    let mut content_responses = Vec::new();
+    for c in post_data.contents {
+        let plaintext = if c.content_type == "text" {
+            decrypt_text(&settings, &c.content, &c.content_nonce)?
+        } else {
+            c.content.clone()
+        };
+        let thumb = content_thumbnail_url(&c.content_type, &c.content);
+        content_responses.push(PostContentResponse {
+            content_id: c.content_id,
+            content_type: c.content_type,
+            display_order: c.display_order,
+            content: plaintext,
+            thumbnail_url: thumb,
+            filename: c.original_filename,
+            mime_type: c.mime_type,
+            file_size: c.file_size,
+        });
+    }
 
     let tags = tag_repo.get_tags(&post_id).await.unwrap_or_default();
 
@@ -276,7 +286,7 @@ pub async fn get_post(
 /// List posts (feed)
 /// GET /api/posts
 pub async fn list_posts(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     OptionalAuth(auth): OptionalAuth,
     Query(params): Query<ListPostsQuery>,
 ) -> Result<Json<PostListResponse>, AppError> {
@@ -343,22 +353,25 @@ pub async fn list_posts(
             .cloned()
             .unwrap_or((None, None));
 
-        let content_responses: Vec<PostContentResponse> = contents
-            .into_iter()
-            .map(|c| {
-                let thumb = content_thumbnail_url(&c.content_type, &c.content);
-                PostContentResponse {
-                    content_id: c.content_id,
-                    content_type: c.content_type,
-                    display_order: c.display_order,
-                    content: c.content,
-                    thumbnail_url: thumb,
-                    filename: c.original_filename,
-                    mime_type: c.mime_type,
-                    file_size: c.file_size,
-                }
-            })
-            .collect();
+        let mut content_responses = Vec::new();
+        for c in contents {
+            let plaintext = if c.content_type == "text" {
+                decrypt_text(&settings, &c.content, &c.content_nonce)?
+            } else {
+                c.content.clone()
+            };
+            let thumb = content_thumbnail_url(&c.content_type, &c.content);
+            content_responses.push(PostContentResponse {
+                content_id: c.content_id,
+                content_type: c.content_type,
+                display_order: c.display_order,
+                content: plaintext,
+                thumbnail_url: thumb,
+                filename: c.original_filename,
+                mime_type: c.mime_type,
+                file_size: c.file_size,
+            });
+        }
 
         post_summaries.push(PostSummaryResponse {
             post_id: post.post_id,
@@ -392,7 +405,7 @@ pub async fn list_posts(
 /// Update a post
 /// PUT /api/posts/:post_id
 pub async fn update_post(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     axum::Extension(auth): axum::Extension<AuthMiddleware>,
     Path(post_id): Path<String>,
     Json(payload): Json<UpdatePostRequest>,
@@ -401,7 +414,7 @@ pub async fn update_post(
     payload.validate().map_err(AppError::from)?;
 
     let repo = PostRepository::new(pool.clone());
-    let tag_repo = PostTagRepository::new(pool);
+    let tag_repo = PostTagRepository::new(pool.clone());
     let now = Utc::now().to_rfc3339();
 
     // Fetch existing post
@@ -437,17 +450,23 @@ pub async fn update_post(
         // Add new contents
         for content_req in contents {
             let content_id = Uuid::new_v4().to_string();
+            let (stored_content, content_nonce) = if content_req.content_type == "text" {
+                encrypt_text(&settings, &pool, &content_req.content).await?
+            } else {
+                (content_req.content.clone(), None)
+            };
             let content = PostContent {
                 content_id: content_id.clone(),
                 post_id: post_id.clone(),
                 content_type: content_req.content_type.clone(),
                 display_order: content_req.display_order,
-                content: content_req.content.clone(),
+                content: stored_content,
                 thumbnail_path: None,
                 original_filename: content_req.filename.clone(),
                 mime_type: content_req.mime_type.clone(),
                 file_size: None,
                 created_at: now.clone(),
+                content_nonce,
             };
 
             repo.add_content(&content).await.map_err(|e| {
@@ -460,7 +479,7 @@ pub async fn update_post(
                 content_id,
                 content_type: content_req.content_type,
                 display_order: content_req.display_order,
-                content: content_req.content,
+                content: content_req.content, // return plaintext
                 thumbnail_url: thumb,
                 filename: content_req.filename,
                 mime_type: content_req.mime_type,
@@ -474,22 +493,24 @@ pub async fn update_post(
             AppError::Internal("Failed to fetch post contents".to_string())
         })?;
 
-        content_responses = contents
-            .into_iter()
-            .map(|c| {
-                let thumb = content_thumbnail_url(&c.content_type, &c.content);
-                PostContentResponse {
-                    content_id: c.content_id,
-                    content_type: c.content_type,
-                    display_order: c.display_order,
-                    content: c.content,
-                    thumbnail_url: thumb,
-                    filename: c.original_filename,
-                    mime_type: c.mime_type,
-                    file_size: c.file_size,
-                }
-            })
-            .collect();
+        for c in contents {
+            let plaintext = if c.content_type == "text" {
+                decrypt_text(&settings, &c.content, &c.content_nonce)?
+            } else {
+                c.content.clone()
+            };
+            let thumb = content_thumbnail_url(&c.content_type, &c.content);
+            content_responses.push(PostContentResponse {
+                content_id: c.content_id,
+                content_type: c.content_type,
+                display_order: c.display_order,
+                content: plaintext,
+                thumbnail_url: thumb,
+                filename: c.original_filename,
+                mime_type: c.mime_type,
+                file_size: c.file_size,
+            });
+        }
     }
 
     // Update publish status if provided
@@ -534,7 +555,7 @@ pub async fn delete_post(
     axum::Extension(auth): axum::Extension<AuthMiddleware>,
     Path(post_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let repo = PostRepository::new(pool);
+    let repo = PostRepository::new(pool.clone());
 
     // Fetch existing post
     let existing = repo.get_by_id(&post_id).await.map_err(|e| {
@@ -549,8 +570,8 @@ pub async fn delete_post(
         return Err(AppError::Forbidden);
     }
 
-    // TODO: Delete associated comments
-    // comment_repo.delete_for_post(&post_id).await?;
+    let comment_repo = CommentRepository::new(pool);
+    comment_repo.delete_for_post(&post_id).await?;
 
     // Delete post and contents
     repo.delete(&post_id).await.map_err(|e| {
@@ -602,7 +623,7 @@ pub async fn toggle_publish(
 /// Search posts with filters
 /// GET /api/posts/search
 pub async fn search_posts(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     Query(params): Query<SearchPostsQuery>,
 ) -> Result<Json<PostListResponse>, AppError> {
     let repo = PostRepository::new(pool.clone());
@@ -666,22 +687,25 @@ pub async fn search_posts(
             .cloned()
             .unwrap_or((None, None));
 
-        let content_responses: Vec<PostContentResponse> = contents
-            .into_iter()
-            .map(|c| {
-                let thumb = content_thumbnail_url(&c.content_type, &c.content);
-                PostContentResponse {
-                    content_id: c.content_id,
-                    content_type: c.content_type,
-                    display_order: c.display_order,
-                    content: c.content,
-                    thumbnail_url: thumb,
-                    filename: c.original_filename,
-                    mime_type: c.mime_type,
-                    file_size: c.file_size,
-                }
-            })
-            .collect();
+        let mut content_responses = Vec::new();
+        for c in contents {
+            let plaintext = if c.content_type == "text" {
+                decrypt_text(&settings, &c.content, &c.content_nonce)?
+            } else {
+                c.content.clone()
+            };
+            let thumb = content_thumbnail_url(&c.content_type, &c.content);
+            content_responses.push(PostContentResponse {
+                content_id: c.content_id,
+                content_type: c.content_type,
+                display_order: c.display_order,
+                content: plaintext,
+                thumbnail_url: thumb,
+                filename: c.original_filename,
+                mime_type: c.mime_type,
+                file_size: c.file_size,
+            });
+        }
 
         post_summaries.push(PostSummaryResponse {
             post_id: post.post_id,

@@ -1,4 +1,4 @@
-//! User event feed — list, mark viewed, preferences.
+//! User "event feed" — list, mark viewed, preferences.
 
 use axum::{
     Json,

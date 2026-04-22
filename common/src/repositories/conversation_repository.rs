@@ -27,8 +27,8 @@ impl ConversationRepository {
 
     pub async fn create(&self, conv: &Conversation) -> Result<(), sqlx::Error> {
         sqlx::query(
- r#"INSERT INTO conversations (conversation_id, conversation_type, name, created_by, created_at, updated_at)
- VALUES ($1, $2, $3, $4, $5, $6)"#,
+ r#"INSERT INTO conversations (conversation_id, conversation_type, name, created_by, created_at, updated_at, proxy_creator_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
  )
  .bind(&conv.conversation_id)
  .bind(&conv.conversation_type)
@@ -36,6 +36,7 @@ impl ConversationRepository {
  .bind(&conv.created_by)
  .bind(&conv.created_at)
  .bind(&conv.updated_at)
+ .bind(&conv.proxy_creator_id)
  .execute(&self.pool)
  .await?;
         Ok(())
@@ -46,7 +47,7 @@ impl ConversationRepository {
         conversation_id: &str,
     ) -> Result<Option<Conversation>, sqlx::Error> {
         sqlx::query_as::<_, Conversation>(
-            r#"SELECT conversation_id, conversation_type, name, created_by, created_at, updated_at
+            r#"SELECT conversation_id, conversation_type, name, created_by, created_at, updated_at, proxy_creator_id
  FROM conversations WHERE conversation_id = $1"#,
         )
         .bind(conversation_id)
@@ -54,18 +55,18 @@ impl ConversationRepository {
         .await
     }
 
-    /// Find an existing direct conversation between two users.
+    /// Find an existing direct conversation between two participants (users or proxies).
     pub async fn find_direct(
         &self,
         user_a: &str,
         user_b: &str,
     ) -> Result<Option<Conversation>, sqlx::Error> {
         sqlx::query_as::<_, Conversation>(
- r#"SELECT c.conversation_id, c.conversation_type, c.name, c.created_by, c.created_at, c.updated_at
+ r#"SELECT c.conversation_id, c.conversation_type, c.name, c.created_by, c.created_at, c.updated_at, c.proxy_creator_id
  FROM conversations c
  WHERE c.conversation_type = 'direct'
- AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.conversation_id AND user_id = $1)
- AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.conversation_id AND user_id = $2)"#,
+ AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.conversation_id AND (user_id = $1 OR proxy_user_id = $1))
+ AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.conversation_id AND (user_id = $2 OR proxy_user_id = $2))"#,
  )
  .bind(user_a)
  .bind(user_b)
@@ -146,14 +147,15 @@ impl ConversationRepository {
 
     pub async fn add_member(&self, member: &ConversationMember) -> Result<(), sqlx::Error> {
         sqlx::query(
-            r#"INSERT INTO conversation_members (id, conversation_id, user_id, role, joined_at)
- VALUES ($1, $2, $3, $4, $5)"#,
+            r#"INSERT INTO conversation_members (id, conversation_id, user_id, role, joined_at, proxy_user_id)
+ VALUES ($1, $2, $3, $4, $5, $6)"#,
         )
         .bind(&member.id)
         .bind(&member.conversation_id)
         .bind(&member.user_id)
         .bind(&member.role)
         .bind(&member.joined_at)
+        .bind(&member.proxy_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -180,8 +182,8 @@ impl ConversationRepository {
         user_id: &str,
     ) -> Result<Option<ConversationMember>, sqlx::Error> {
         sqlx::query_as::<_, ConversationMember>(
-            r#"SELECT id, conversation_id, user_id, role, joined_at
- FROM conversation_members WHERE conversation_id = $1 AND user_id = $2"#,
+            r#"SELECT id, conversation_id, user_id, role, joined_at, proxy_user_id
+ FROM conversation_members WHERE conversation_id = $1 AND (user_id = $2 OR proxy_user_id = $2)"#,
         )
         .bind(conversation_id)
         .bind(user_id)
@@ -194,7 +196,7 @@ impl ConversationRepository {
         conversation_id: &str,
     ) -> Result<Vec<ConversationMember>, sqlx::Error> {
         sqlx::query_as::<_, ConversationMember>(
-            r#"SELECT id, conversation_id, user_id, role, joined_at
+            r#"SELECT id, conversation_id, user_id, role, joined_at, proxy_user_id
  FROM conversation_members WHERE conversation_id = $1 ORDER BY joined_at"#,
         )
         .bind(conversation_id)

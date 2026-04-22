@@ -5,29 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
-/// Email scheduler service (stub)
-pub struct EmailSchedulerService {
-    _pool: AnyPool,
-    _settings: Arc<Settings>,
-}
-
-impl EmailSchedulerService {
-    pub async fn new(
-        pool: AnyPool,
-        settings: Arc<Settings>,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self {
-            _pool: pool,
-            _settings: settings,
-        })
-    }
-
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: Implement email scheduling
-        Ok(())
-    }
-}
-
 /// Periodically probes each admin-configured STUN server and updates last_status.
 pub struct StunHealthCheckService {
     pool: AnyPool,
@@ -64,7 +41,10 @@ impl StunHealthCheckService {
             let status = probe_stun(&server.url).await;
             let now = chrono::Utc::now().to_rfc3339();
             if let Err(e) = repo.update_health(&server.id, status, &now).await {
-                tracing::warn!("STUN health-check: failed to persist status for {}: {e:?}", server.url);
+                tracing::warn!(
+                    "STUN health-check: failed to persist status for {}: {e:?}",
+                    server.url
+                );
             } else {
                 tracing::debug!("STUN health-check: {} → {}", server.url, status);
             }
@@ -77,7 +57,7 @@ impl StunHealthCheckService {
 /// Returns "ok" or "unreachable".
 async fn probe_stun(url: &str) -> &'static str {
     // Parse stun:host:port or stun:host (default port 3478).
-    // Also accepts turn: prefix — we only test UDP reachability, not auth.
+    // Also accepts turn: prefix, we only test UDP reachability, not auth.
     let addr_part = url
         .trim_start_matches("stun:")
         .trim_start_matches("turn:")
@@ -102,9 +82,14 @@ async fn probe_stun(url: &str) -> &'static str {
 
     // Minimal STUN Binding Request (20 bytes): type=0x0001, length=0, magic=0x2112A442, tx-id
     let mut req = [0u8; 20];
-    req[0] = 0x00; req[1] = 0x01; // Message Type: Binding Request
-    req[2] = 0x00; req[3] = 0x00; // Message Length: 0
-    req[4] = 0x21; req[5] = 0x12; req[6] = 0xA4; req[7] = 0x42; // Magic Cookie
+    req[0] = 0x00;
+    req[1] = 0x01; // Message Type: Binding Request
+    req[2] = 0x00;
+    req[3] = 0x00; // Message Length: 0
+    req[4] = 0x21;
+    req[5] = 0x12;
+    req[6] = 0xA4;
+    req[7] = 0x42; // Magic Cookie
     // Transaction ID (12 bytes) — arbitrary
     req[8..20].copy_from_slice(b"magnolia_chk");
 

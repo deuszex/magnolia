@@ -11,6 +11,8 @@ pub struct Conversation {
     pub created_by: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Set when a proxy account created the conversation; `created_by` holds `__proxy__` sentinel.
+    pub proxy_creator_id: Option<String>,
 }
 
 /// A member of a conversation
@@ -22,4 +24,6 @@ pub struct ConversationMember {
     /// "owner", "admin", or "member"
     pub role: String,
     pub joined_at: String,
+    /// Set when a proxy account is the member; `user_id` holds `__proxy__` sentinel.
+    pub proxy_user_id: Option<String>,
 }

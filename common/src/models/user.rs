@@ -5,7 +5,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct UserAccount {
     pub user_id: String,
-    /// Nullable — users may register without an email address.
+    /// Nullable. Users may register without an email address, as username is primary key.
     pub email: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
@@ -59,6 +59,9 @@ pub struct Session {
     pub user_id: String,
     pub expires_at: String,
     pub created_at: String,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub fingerprint: Option<String>,
 }
 
 impl Session {
@@ -71,6 +74,9 @@ impl Session {
             user_id,
             expires_at: expires_at.to_rfc3339(),
             created_at: now.to_rfc3339(),
+            ip_address: None,
+            user_agent: None,
+            fingerprint: None,
         }
     }
 

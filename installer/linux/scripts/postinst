@@ -236,7 +236,7 @@ EOF
  mkdir -p /etc/nginx/sites-available
  cat > /etc/nginx/sites-available/magnolia << NGINX_CONF
 # Magnolia reverse-proxy configuration
-# Generated at install time — review and adjust SSL paths before enabling.
+# Generated at install time, REVIEW the settings and adjust SSL paths before enabling.
 #
 # To enable:
 # ln -s /etc/nginx/sites-available/magnolia /etc/nginx/sites-enabled/magnolia

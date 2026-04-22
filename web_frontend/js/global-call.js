@@ -172,7 +172,7 @@ var globalCall = (function () {
             });
         }
 
-        // On receiving remote audio — attach to a hidden <audio> element
+        // On receiving remote audio, attach to a hidden <audio> element
         pc.ontrack = function (e) {
             var audioId = 'global-call-audio-' + targetUserId;
             var audio = document.getElementById(audioId);
@@ -252,7 +252,7 @@ var globalCall = (function () {
                 renderPanel();
                 renderSidebarIndicators();
                 if (state.inCall) {
-                    // Close PCs for users who have left — do NOT send new offers here.
+                    // Close PCs for users who have left, do NOT send new offers here.
                     // New joiners are responsible for sending offers to existing participants;
                     // existing participants only answer. Sending from both sides causes glare.
                     Object.keys(state.peerConnections).forEach(function (uid) {

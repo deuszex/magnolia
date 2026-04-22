@@ -1,4 +1,4 @@
-// Events / notifications module — bell badge, events page, toast notifications
+// Events / notifications module, bell badge, events page, toast notifications
 var events = (function () {
 
     var CATEGORIES = ['system', 'federation', 'admin', 'message', 'post', 'call'];
@@ -74,7 +74,7 @@ var events = (function () {
             .replace(/"/g, '&quot;');
     }
 
-    // WS handler — called from messaging.js / main.js 
+    // WS handler, called from messaging.js / main.js 
 
     function handleWsEvent(event) {
         // event is the inner "event" object from {"type":"event","event":{...}}
@@ -118,7 +118,7 @@ var events = (function () {
             '</div>' +
             '</div>';
 
-        // Filter bar — viewed tabs
+        // Filter bar, viewed tabs
         container.querySelectorAll('.evt-filter-btn[data-viewed]').forEach(function (btn) {
             btn.onclick = function () {
                 container.querySelectorAll('.evt-filter-btn[data-viewed]').forEach(function (b) { b.classList.remove('active'); });
@@ -128,7 +128,7 @@ var events = (function () {
             };
         });
 
-        // Filter bar — category tabs
+        // Filter bar, category tabs
         container.querySelectorAll('.evt-cat-btn').forEach(function (btn) {
             btn.onclick = function () {
                 container.querySelectorAll('.evt-cat-btn').forEach(function (b) { b.classList.remove('active'); });

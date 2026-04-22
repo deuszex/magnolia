@@ -1,10 +1,15 @@
-// User Directory — local + federated users, grouped by server, lazy-loaded
+// User Directory, local + federated users, grouped by server, lazy-loaded
 var directory = (function () {
     var PAGE_SIZE = 24;
     var searchTimer = null;
     var currentQuery = '';
     var activeFilter = 'all'; // 'all' | 'local' | server_connection_id
     var currentUserId = null; // set at render time, used to skip self
+
+    // Sentinel user IDs are internal system identifiers, not real accounts
+    function isSentinel(userId) {
+        return userId === '__proxy__' || userId === '__fed__';
+    }
 
     // Per-section pagination state: { offset, total, loading }
     var sectionState = {};
@@ -183,9 +188,10 @@ var directory = (function () {
                 var raw = data.users || [];
                 var selfFiltered = raw.some(function (u) { return u.user_id === currentUserId; });
                 users = raw
-                    .filter(function (u) { return u.user_id !== currentUserId; })
+                    .filter(function (u) { return u.user_id !== currentUserId && !isSentinel(u.user_id); })
                     .map(function (u) { return { _type: 'local', user_id: u.user_id, display_name: u.display_name, handle: u.email, avatar_url: u.avatar_url }; });
-                total = Math.max(0, (data.total || 0) - (selfFiltered ? 1 : 0));
+                var sentinelCount = raw.filter(function (u) { return isSentinel(u.user_id); }).length;
+                total = Math.max(0, (data.total || 0) - (selfFiltered ? 1 : 0) - sentinelCount);
             } else {
                 var url = '/api/federation/users?limit=' + PAGE_SIZE + '&offset=' + state.offset +
                     '&server_id=' + encodeURIComponent(serverConnectionId);

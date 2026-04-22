@@ -10,7 +10,7 @@ use magnolia_common::errors::AppError;
 pub fn validate_password_strength(password: &str) -> Result<(), AppError> {
     if password.len() < 12 {
         return Err(AppError::BadRequest(
-            "Password must be at least 12 characters long".to_string(),
+            "Password must be at least 12 characters, Uppercase + Lowercase, 1 number, 1 symbol (?!$...)".to_string(),
         ));
     }
 

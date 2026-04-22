@@ -31,7 +31,8 @@ const NONCE_LEN: usize = 12;
 /// Live server identity, loaded once at startup.
 #[derive(Clone)]
 pub struct ServerIdentity {
-    /// The raw verifying (public) key bytes — shared with peers during handshake.
+    /// The raw verifying (public) key bytes, shared with peers during handshake.
+    /// Used by other servers to verify the signers identity.
     pub public_key_bytes: Vec<u8>,
     /// The signing key, held in memory for request signing.
     /// We keep a clone-friendly handle by re-decoding on demand; the bytes

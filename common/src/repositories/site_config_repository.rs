@@ -21,6 +21,8 @@ impl SiteConfigRepository {
  allow_video_posts, allow_file_posts, encryption_at_rest_enabled,
  message_auto_delete_enabled, message_auto_delete_delay_hours,
  registration_mode, application_timeout_hours, enforce_invite_email,
+ password_reset_email_enabled, password_reset_signing_key_enabled,
+ proxy_user_system, proxy_rate_limit_pieces, proxy_rate_limit_bytes,
  created_at, updated_at
  FROM site_config
  WHERE id = 1
@@ -31,6 +33,7 @@ impl SiteConfigRepository {
     }
 
     /// Update site configuration (partial update - merges with current values)
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
         media_storage_path: Option<&str>,
@@ -44,6 +47,11 @@ impl SiteConfigRepository {
         registration_mode: Option<&str>,
         application_timeout_hours: Option<i32>,
         enforce_invite_email: Option<i32>,
+        password_reset_email_enabled: Option<i32>,
+        password_reset_signing_key_enabled: Option<i32>,
+        proxy_user_system: Option<i32>,
+        proxy_rate_limit_pieces: Option<i32>,
+        proxy_rate_limit_bytes: Option<i32>,
     ) -> Result<SiteConfig, sqlx::Error> {
         let current = self.get().await?;
         let now = Utc::now().to_rfc3339();
@@ -62,7 +70,12 @@ impl SiteConfigRepository {
  registration_mode = $9,
  application_timeout_hours = $10,
  enforce_invite_email = $11,
- updated_at = $12
+ password_reset_email_enabled = $12,
+ password_reset_signing_key_enabled = $13,
+ proxy_user_system = $14,
+ proxy_rate_limit_pieces = $15,
+ proxy_rate_limit_bytes = $16,
+ updated_at = $17
  WHERE id = 1
  "#,
         )
@@ -77,6 +90,14 @@ impl SiteConfigRepository {
         .bind(registration_mode.unwrap_or(&current.registration_mode))
         .bind(application_timeout_hours.unwrap_or(current.application_timeout_hours))
         .bind(enforce_invite_email.unwrap_or(current.enforce_invite_email))
+        .bind(password_reset_email_enabled.unwrap_or(current.password_reset_email_enabled))
+        .bind(
+            password_reset_signing_key_enabled
+                .unwrap_or(current.password_reset_signing_key_enabled),
+        )
+        .bind(proxy_user_system.unwrap_or(current.proxy_user_system))
+        .bind(proxy_rate_limit_pieces.unwrap_or(current.proxy_rate_limit_pieces))
+        .bind(proxy_rate_limit_bytes.unwrap_or(current.proxy_rate_limit_bytes))
         .bind(&now)
         .execute(&self.pool)
         .await?;

@@ -395,7 +395,7 @@ fn extract_query_params(uri: &axum::http::Uri) -> Option<HashMap<String, String>
     })
 }
 
-fn generate_fingerprint(headers: &HeaderMap, ip: Option<IpAddr>) -> String {
+pub fn generate_fingerprint(headers: &HeaderMap, ip: Option<IpAddr>) -> String {
     let mut hasher = Sha256::new();
 
     // Add stable headers to fingerprint

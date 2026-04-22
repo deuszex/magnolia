@@ -162,7 +162,7 @@ var search = (function () {
     async function performSearch() {
         var params = buildSearchParams();
         if (params.length === 0) {
-            // No filters — go back to feed
+            // No filters, go back to feed
             posts.loadFeed(true);
             return;
         }
@@ -215,7 +215,7 @@ var search = (function () {
         // Delegate to posts module
         if (typeof posts !== 'undefined' && posts.renderSearchResults) {
             var temp = document.createElement('div');
-            // Use the same approach — build from posts module
+            // Use the same approach, build from posts module
             return buildCardFromPost(p);
         }
         return document.createElement('div');

@@ -64,6 +64,10 @@ pub struct MemberInfo {
     pub user_id: String,
     pub role: String,
     pub joined_at: String,
+    /// True when this member is a proxy account rather than a regular user
+    pub is_proxy: bool,
+    pub display_name: Option<String>,
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

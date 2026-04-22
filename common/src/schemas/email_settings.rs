@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-/// Response for email settings — password is never included
+/// Response for email settings, password is never included
 #[derive(Debug, Serialize)]
 pub struct EmailSettingsResponse {
     pub smtp_host: String,
@@ -15,7 +15,7 @@ pub struct EmailSettingsResponse {
     pub updated_at: String,
 }
 
-/// Request to update email settings (partial — omitted fields keep their current value)
+/// Request to update email settings (partial update, with omitted fields keeping their current value)
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateEmailSettingsRequest {
     #[validate(length(max = 255))]

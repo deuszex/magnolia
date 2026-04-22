@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     around the user's ECDH private key JWK, keyed by a PBKDF2-derived wrapping
     key that the server never sees.  Only the owning user can decrypt it. */
     e2e_key_blob TEXT,
+    /*Per-user HMAC-SHA256 signing key for offline password reset.
+    32 random bytes stored as base64 NULL means no key generated yet.*/
+    password_reset_signing_key TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -31,3 +34,11 @@ INSERT OR IGNORE INTO user_accounts
 VALUES
     ('__fed__', '__fed__@system.internal', '__fed__', '', 0, 0, 0,
     datetime('now'), datetime('now'));
+
+-- Sentinel account for proxy-originated rows in tables that FK-reference user_accounts.
+-- Mirrors the __fed__ sentinel used for federated messages.
+INSERT OR IGNORE INTO user_accounts
+    (user_id, email, username, password_hash, verified, admin, active, created_at, updated_at)
+VALUES
+    ('__proxy__', '__proxy__@system.internal', '__proxy__', '', 0, 0, 0,
+     datetime('now'), datetime('now'));

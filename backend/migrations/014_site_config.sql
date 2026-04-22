@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS site_config (
     federation_max_connections INTEGER NOT NULL DEFAULT 50,
     /*How many relay hops of discovery this server will propagate (1 = direct peers only).*/
     federation_relay_depth INTEGER NOT NULL DEFAULT 1,
+    password_reset_email_enabled INTEGER NOT NULL DEFAULT 1,
+    password_reset_signing_key_enabled INTEGER NOT NULL DEFAULT 0,
+    proxy_user_system INTEGER NOT NULL DEFAULT 0,
+    proxy_rate_limit_pieces INTEGER NOT NULL DEFAULT 1,
+    proxy_rate_limit_bytes INTEGER NOT NULL DEFAULT 12582912,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

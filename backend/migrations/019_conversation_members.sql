@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS conversation_members (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES user_accounts(user_id) ON DELETE CASCADE,
+    proxy_user_id TEXT REFERENCES proxy_accounts(proxy_id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'member',
     joined_at TEXT NOT NULL
 );

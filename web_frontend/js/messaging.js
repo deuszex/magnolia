@@ -1,7 +1,6 @@
 // Messaging UI — sidebar list, chat modal with attachments, preferences, blacklist
 var messaging = (function () {
     var pollTimer = null;
-    var sidebarPollTimer = null;
     var currentConversationId = null;
     var currentConversationMeta = null; // { conversation_type, members: [{user_id, role}] }
     var chatModalExpanded = false;
@@ -48,37 +47,36 @@ var messaging = (function () {
         container.innerHTML = '';
 
         convs.forEach(function (c) {
-            var el = document.createElement('div');
-            var isActive = c.conversation_id === currentConversationId;
-            el.className = 'msg-conv-item' + (isActive ? ' active' : '');
-
-            // Use display_name for DMs, fall back to name, then type label
-            var label = c.display_name || c.name || (c.conversation_type === 'group' ? 'Group' : 'DM');
-            var unread = c.unread_count || 0;
-            var time = c.last_message_at ? formatTime(c.last_message_at) : '';
-
-            el.innerHTML =
-                '<div class="msg-conv-info">' +
-                '<div class="msg-conv-name">' + escapeHtml(label) + '</div>' +
-                '</div>' +
-                '<div class="msg-conv-meta">' +
-                '<span class="msg-conv-time">' + time + '</span>' +
-                (unread > 0 ? '<span class="msg-unread-badge">' + unread + '</span>' : '') +
-                '<button class="msg-fav-star' + (c.is_favourite ? ' active' : '') + '" data-conv-id="' + escapeAttr(c.conversation_id) + '" title="Toggle favourite">&#9733;</button>' +
-                '</div>';
-
-            // Whole item is clickable
-            el.onclick = function () {
-                openChat(c.conversation_id, label);
-            };
-
-            el.querySelector('.msg-fav-star').onclick = function (e) {
-                e.stopPropagation();
-                toggleFavourite(c.conversation_id, !c.is_favourite);
-            };
-
-            container.appendChild(el);
+            container.appendChild(buildConvItem(c));
         });
+    }
+
+    function buildConvItem(c) {
+        var el = document.createElement('div');
+        var isActive = c.conversation_id === currentConversationId;
+        el.className = 'msg-conv-item' + (isActive ? ' active' : '');
+        el.dataset.convId = c.conversation_id;
+
+        var label = c.display_name || c.name || (c.conversation_type === 'group' ? 'Group' : 'DM');
+        var unread = c.unread_count || 0;
+        var time = c.last_message_at ? formatTime(c.last_message_at) : '';
+
+        el.innerHTML =
+            '<div class="msg-conv-info">' +
+            '<div class="msg-conv-name">' + escapeHtml(label) + '</div>' +
+            '</div>' +
+            '<div class="msg-conv-meta">' +
+            '<span class="msg-conv-time">' + time + '</span>' +
+            (unread > 0 ? '<span class="msg-unread-badge">' + unread + '</span>' : '') +
+            '<button class="msg-fav-star' + (c.is_favourite ? ' active' : '') + '" data-conv-id="' + escapeAttr(c.conversation_id) + '" title="Toggle favourite">&#9733;</button>' +
+            '</div>';
+
+        el.onclick = function () { openChat(c.conversation_id, label); };
+        el.querySelector('.msg-fav-star').onclick = function (e) {
+            e.stopPropagation();
+            toggleFavourite(c.conversation_id, !c.is_favourite);
+        };
+        return el;
     }
 
     async function toggleFavourite(conversationId, add) {
@@ -94,16 +92,7 @@ var messaging = (function () {
         }
     }
 
-    function startSidebarPolling() {
-        stopSidebarPolling();
-        sidebarPollTimer = setInterval(loadSidebar, 15000);
-    }
-
-    function stopSidebarPolling() {
-        if (sidebarPollTimer) { clearInterval(sidebarPollTimer); sidebarPollTimer = null; }
-    }
-
-    // Chat modal 
+    // Chat modal
 
     async function openChat(conversationId, title) {
         currentConversationId = conversationId;
@@ -124,17 +113,24 @@ var messaging = (function () {
         try {
             var conv = await api.get('/api/conversations/' + conversationId);
             currentConversationMeta = conv;
-            // Show lock icon in title when it's a DM and E2E is available
+            // Show lock icon in title only when it's a DM and E2E key is actually loaded
             var titleEl = document.getElementById('chat-modal-title');
-            if (titleEl && conv.conversation_type === 'direct' && typeof e2e !== 'undefined') {
+            if (titleEl && conv.conversation_type === 'direct' && typeof e2e !== 'undefined' && e2e.isReady()) {
                 titleEl.textContent = '\uD83D\uDD12 ' + (title || 'Chat');
             }
         } catch (_) { /* non-fatal */ }
 
         loadMessages(conversationId);
 
-        document.querySelectorAll('.msg-conv-item').forEach(function (el) { el.classList.remove('active'); });
-        loadSidebar();
+        // Mark active item and clear its unread badge
+        document.querySelectorAll('.msg-conv-item').forEach(function (el) {
+            var active = el.dataset.convId === conversationId;
+            el.classList.toggle('active', active);
+            if (active) {
+                var badge = el.querySelector('.msg-unread-badge');
+                if (badge) badge.remove();
+            }
+        });
         startMessagePolling(conversationId);
 
         // Notify main.js to check for active call
@@ -156,10 +152,202 @@ var messaging = (function () {
         if (joinBtn) joinBtn.style.display = 'none';
     }
 
+    function renderConversationInfoPanel(panel) {
+        var meta = currentConversationMeta;
+        if (!meta) {
+            panel.innerHTML = '<p class="chat-info-id">Loading\u2026</p>';
+            return;
+        }
+
+        var createdAt = meta.created_at ? new Date(meta.created_at).toLocaleString() : '';
+        var members = meta.members || [];
+        var me = app.state.currentUser && app.state.currentUser.user_id;
+        var myRole = (members.find(function (m) { return m.user_id === me; }) || {}).role;
+        var isGroupAdmin = meta.conversation_type === 'group' && myRole === 'admin';
+
+        var membersHtml = members.map(function (m) {
+            var name = m.display_name || m.username || m.user_id;
+            var badge = m.is_proxy ? ' <span class="chat-info-proxy-badge">proxy</span>' : '';
+            var sub = m.username && m.display_name ? ' <span class="chat-info-member-sub">@' + escapeHtml(m.username) + '</span>' : '';
+            return '<li>' + escapeHtml(name) + badge + sub + '</li>';
+        }).join('');
+
+        var addMemberHtml = isGroupAdmin ? (
+            '<div class="chat-info-add-member">' +
+            '<div class="chat-info-add-member-title">Add member</div>' +
+            '<div class="chat-info-add-tabs">' +
+            '<button class="chat-info-add-tab active" data-src="user">User</button>' +
+            '<button class="chat-info-add-tab" data-src="proxy">Proxy</button>' +
+            '</div>' +
+            '<div id="chat-add-user-section">' +
+            '<input id="chat-add-user-input" class="form-input chat-info-add-input" placeholder="Search by username\u2026" autocomplete="off">' +
+            '<ul id="chat-add-user-results" class="chat-info-add-results"></ul>' +
+            '</div>' +
+            '<div id="chat-add-proxy-section" style="display:none">' +
+            '<ul id="chat-add-proxy-list" class="chat-info-add-results">Loading\u2026</ul>' +
+            '</div>' +
+            '</div>'
+        ) : '';
+
+        panel.innerHTML =
+            '<div class="chat-info-id">ID: <code>' + escapeHtml(meta.conversation_id) + '</code></div>' +
+            (createdAt ? '<div class="chat-info-id">Created: ' + escapeHtml(createdAt) + '</div>' : '') +
+            '<ul class="chat-info-members">' + membersHtml + '</ul>' +
+            addMemberHtml;
+
+        if (isGroupAdmin) {
+            initAddMemberUI(panel, meta);
+        }
+    }
+
+    function initAddMemberUI(panel, meta) {
+        var existingIds = (meta.members || []).map(function (m) { return m.user_id; });
+        var convId = meta.conversation_id;
+
+        // Tab switching
+        panel.querySelectorAll('.chat-info-add-tab').forEach(function (tab) {
+            tab.onclick = function () {
+                panel.querySelectorAll('.chat-info-add-tab').forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                var src = tab.dataset.src;
+                panel.querySelector('#chat-add-user-section').style.display = src === 'user' ? '' : 'none';
+                panel.querySelector('#chat-add-proxy-section').style.display = src === 'proxy' ? '' : 'none';
+                if (src === 'proxy') loadProxyAddList(panel, convId, existingIds);
+            };
+        });
+
+        // User search
+        var userInput = panel.querySelector('#chat-add-user-input');
+        var userResults = panel.querySelector('#chat-add-user-results');
+        var searchTimer = null;
+        userInput.oninput = function () {
+            clearTimeout(searchTimer);
+            var q = userInput.value.trim();
+            if (!q) { userResults.innerHTML = ''; return; }
+            searchTimer = setTimeout(async function () {
+                try {
+                    var res = await api.get('/api/users?search=' + encodeURIComponent(q) + '&limit=10');
+                    var users = (res.users || res).filter(function (u) { return existingIds.indexOf(u.user_id) === -1 && u.user_id !== '__proxy__' && u.user_id !== '__fed__'; });
+                    userResults.innerHTML = users.length ? users.map(function (u) {
+                        var label = escapeHtml(u.display_name || u.username || u.user_id);
+                        var sub = u.username ? ' <span class="chat-info-member-sub">@' + escapeHtml(u.username) + '</span>' : '';
+                        return '<li class="chat-info-add-item" data-id="' + escapeAttr(u.user_id) + '">' + label + sub + '</li>';
+                    }).join('') : '<li class="chat-info-add-empty">No results</li>';
+                    userResults.querySelectorAll('.chat-info-add-item').forEach(function (li) {
+                        li.onclick = function () { addMemberToConversation(convId, li.dataset.id, panel); };
+                    });
+                } catch (e) {
+                    userResults.innerHTML = '<li class="chat-info-add-empty">Error: ' + escapeHtml(e.message) + '</li>';
+                }
+            }, 300);
+        };
+    }
+
+    async function loadProxyAddList(panel, convId, existingIds) {
+        var list = panel.querySelector('#chat-add-proxy-list');
+        try {
+            var res = await api.get('/api/proxy/list-public');
+            var proxies = (res.proxies || res).filter(function (p) { return existingIds.indexOf(p.proxy_id) === -1; });
+            list.innerHTML = proxies.length ? proxies.map(function (p) {
+                var name = escapeHtml(p.display_name || p.proxy_id);
+                return '<li class="chat-info-add-item" data-id="' + escapeAttr(p.proxy_id) + '">' +
+                    name + ' <span class="chat-info-proxy-badge">proxy</span></li>';
+            }).join('') : '<li class="chat-info-add-empty">No proxies available</li>';
+            list.querySelectorAll('.chat-info-add-item').forEach(function (li) {
+                li.onclick = function () { addMemberToConversation(convId, li.dataset.id, panel); };
+            });
+        } catch (e) {
+            list.innerHTML = '<li class="chat-info-add-empty">Error: ' + escapeHtml(e.message) + '</li>';
+        }
+    }
+
+    async function addMemberToConversation(convId, userId, panel) {
+        try {
+            await api.post('/api/conversations/' + convId + '/members', { user_id: userId });
+            // Refresh conversation meta and re-render panel
+            var updated = await api.get('/api/conversations/' + convId);
+            currentConversationMeta = updated;
+            renderConversationInfoPanel(panel);
+        } catch (e) {
+            var err = panel.querySelector('#chat-add-member-error');
+            if (!err) {
+                err = document.createElement('div');
+                err.id = 'chat-add-member-error';
+                err.className = 'error-box';
+                err.style.marginTop = '6px';
+                panel.appendChild(err);
+            }
+            err.textContent = 'Failed to add member: ' + e.message;
+        }
+    }
+
     function toggleChatSize() {
         var modal = document.getElementById('chat-modal');
         chatModalExpanded = !chatModalExpanded;
+        // Clear any user-resized inline dimensions so the CSS class takes over cleanly
+        modal.style.width = '';
+        modal.style.height = '';
         modal.classList.toggle('expanded', chatModalExpanded);
+    }
+
+    function initResizeHandle() {
+        var modal = document.getElementById('chat-modal');
+        var handle = document.getElementById('chat-modal-resize-handle');
+        if (!modal || !handle) return;
+
+        var startX, startY, startW, startH;
+
+        // Base (min) and expanded (max) sizes - must match CSS values
+        var MIN_W = 360, MIN_H = 520;
+
+        function getMaxW() {
+            // match CSS: min(680px, 100vw - right_offset - 16px)
+            // On mobile the modal is full-width and handle is hidden, so just cap at 680
+            return Math.min(680, window.innerWidth - 228 - 16);
+        }
+        function getMaxH() {
+            return Math.floor(window.innerHeight * 0.8);
+        }
+
+        handle.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            // Snapshot starting state
+            startX = e.clientX;
+            startY = e.clientY;
+            startW = modal.offsetWidth;
+            startH = modal.offsetHeight;
+
+            // Disable CSS transition during drag for snappy feel
+            modal.style.transition = 'none';
+
+            function onMove(e) {
+                var dw = startX - e.clientX; // dragging left = wider
+                var dh = startY - e.clientY; // dragging up   = taller
+                var maxW = getMaxW();
+                var maxH = getMaxH();
+
+                var newW = Math.max(MIN_W, Math.min(maxW, startW + dw));
+                var newH = Math.max(MIN_H, Math.min(maxH, startH + dh));
+
+                modal.style.width = newW + 'px';
+                modal.style.height = newH + 'px';
+
+                // Sync expanded flag so toggleChatSize still works sensibly
+                var atMax = newW >= maxW && newH >= maxH;
+                chatModalExpanded = atMax;
+                modal.classList.toggle('expanded', atMax);
+            }
+
+            function onUp() {
+                // Re-enable transition
+                modal.style.transition = '';
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
     }
 
     function switchTab(tabName) {
@@ -211,8 +399,25 @@ var messaging = (function () {
         var resizeBtn = document.getElementById('btn-chat-resize');
         if (resizeBtn) resizeBtn.onclick = toggleChatSize;
 
+        initResizeHandle();
+
         var closeBtn = document.getElementById('btn-chat-close');
         if (closeBtn) closeBtn.onclick = closeChat;
+
+        // Title button toggles the conversation info panel
+        var titleBtn = document.getElementById('chat-modal-title');
+        if (titleBtn) {
+            titleBtn.onclick = function () {
+                var panel = document.getElementById('chat-info-panel');
+                if (!panel) return;
+                if (panel.style.display === 'none') {
+                    renderConversationInfoPanel(panel);
+                    panel.style.display = '';
+                } else {
+                    panel.style.display = 'none';
+                }
+            };
+        }
 
         var sendBtn = document.getElementById('btn-chat-send');
         if (sendBtn) sendBtn.onclick = function () { sendMessage(); };
@@ -322,7 +527,7 @@ var messaging = (function () {
             html += '<div class="message-sender">' + escapeHtml(senderName) + '</div>';
         }
 
-        // Text content (may need async decryption — rendered inline first, then updated)
+        // Text content (may need async decryption, rendered inline first, then updated)
         if (m.encrypted_content) {
             var displayText = m.encrypted_content;
             if (typeof e2e !== 'undefined' && e2e.isEncrypted(displayText)) {
@@ -358,7 +563,7 @@ var messaging = (function () {
             // ECDH shared key is symmetric: encrypt(my_priv, their_pub) == decrypt(their_priv, my_pub).
             // So both sender and receiver must derive the key using the OTHER party's public key.
             // Using m.sender_id works for received messages, but for own sent messages it would
-            // try ECDH(my_priv, my_pub) — a completely different key — causing decryption failure.
+            // try ECDH(my_priv, my_pub), a completely different key, causing decryption failure.
             var meta = currentConversationMeta;
             (async function () {
                 var keyPartnerId = m.sender_id; // correct for messages received from others
@@ -441,7 +646,7 @@ var messaging = (function () {
 
         var newIds = messages.map(function (m) { return m.message_id; });
 
-        // Identical IDs — only patch federated_status badges, no DOM rebuild.
+        // Identical IDs, only patch federated_status badges, no DOM rebuild.
         if (newIds.length === renderedMessageIds.length &&
             newIds.every(function (id, i) { return id === renderedMessageIds[i]; })) {
             patchFederatedStatus(messages);
@@ -454,7 +659,7 @@ var messaging = (function () {
             renderedMessageIds.every(function (id, i) { return id === newIds[i]; });
 
         if (isAppendOnly) {
-            // Only append the new messages — preserves existing DOM (videos keep playing)
+            // Only append the new messages, preserves existing DOM (videos keep playing)
             var wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
             for (var i = renderedMessageIds.length; i < messages.length; i++) {
                 container.appendChild(createMessageBubble(messages[i]));
@@ -464,7 +669,7 @@ var messaging = (function () {
             return wasAtBottom;
         }
 
-        // Structural change (deletion, reorder) — full re-render required
+        // Structural change (deletion, reorder), full re-render required
         var wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
         renderMessages(messages);
         if (wasAtBottom) container.scrollTop = container.scrollHeight;
@@ -483,8 +688,8 @@ var messaging = (function () {
         var rawText = text;
 
         try {
-            // Encrypt for direct messages when E2E is available
-            if (text && typeof e2e !== 'undefined' && currentConversationMeta &&
+            // Encrypt for direct messages only when E2E key is loaded and ready
+            if (text && typeof e2e !== 'undefined' && e2e.isReady() && currentConversationMeta &&
                 currentConversationMeta.conversation_type === 'direct') {
                 var me = app.state.currentUser && app.state.currentUser.user_id;
                 var other = (currentConversationMeta.members || []).find(function (m) { return m.user_id !== me; });
@@ -729,7 +934,9 @@ var messaging = (function () {
             } else {
                 api.get('/api/users?limit=80' + (q ? '&q=' + encodeURIComponent(q) : ''))
                     .then(function (data) {
-                        allUsers = data.users || [];
+                        allUsers = (data.users || []).filter(function (u) {
+                            return u.user_id !== '__proxy__' && u.user_id !== '__fed__';
+                        });
                         renderPickerList();
                     }).catch(function () { });
             }
@@ -1071,7 +1278,7 @@ var messaging = (function () {
                 '<div id="fed-save-msg" style="margin-top:8px;font-size:13px"></div>' +
                 '<hr style="margin:28px 0">' +
                 '<h3>Blocked Servers</h3>' +
-                '<p style="font-size:13px;color:var(--t-secondary);margin-bottom:12px">Block an entire server — their users will not appear in search and their content will not be shared with you.</p>' +
+                '<p style="font-size:13px;color:var(--t-secondary);margin-bottom:12px">Block an entire server, their users will not appear in search and their content will not be shared with you.</p>' +
                 '<div id="fed-server-bans-section"><div class="settings-loading">Loading\u2026</div></div>' +
                 '<hr style="margin:28px 0">' +
                 '<h3>Federated Users</h3>' +
@@ -1532,7 +1739,6 @@ var messaging = (function () {
 
     function stopPolling() {
         stopMessagePolling();
-        stopSidebarPolling();
     }
 
     function formatTime(isoStr) {
@@ -1576,8 +1782,9 @@ var messaging = (function () {
             }
 
             users.forEach(function (u) {
-                // Don't show self
+                // Don't show self or sentinel system accounts
                 if (app.state.currentUser && u.user_id === app.state.currentUser.user_id) return;
+                if (u.user_id === '__proxy__' || u.user_id === '__fed__') return;
 
                 var el = document.createElement('div');
                 el.className = 'user-item';
@@ -1625,7 +1832,7 @@ var messaging = (function () {
             loadSidebar();
             openChat(conv.conversation_id, userEmail || conv.name || 'DM');
         } catch (e) {
-            // Conversation might already exist — check error
+            // Conversation might already exist, check error
             if (e.message && e.message.toLowerCase().indexOf('already exists') !== -1) {
                 // Try to find existing conversation in sidebar
                 try {
@@ -1660,7 +1867,6 @@ var messaging = (function () {
         renderNewConversationDialog: renderNewConversationDialog,
         renderPreferences: renderPreferences,
         renderBlacklist: renderBlacklist,
-        startSidebarPolling: startSidebarPolling,
         stopPolling: stopPolling,
         hideDialog: hideDialog,
         renderCallHistory: renderCallHistory,
@@ -1671,7 +1877,6 @@ var messaging = (function () {
             // Refresh the open chat if it's the affected conversation.
             if (data.conversation_id && data.conversation_id === currentConversationId) {
                 if (data.message && data.message.message_id) {
-                    // Append only if not already rendered — never rebuild the whole list.
                     if (renderedMessageIds.indexOf(data.message.message_id) === -1) {
                         var container = document.getElementById('chat-messages');
                         if (container) {
@@ -1685,8 +1890,43 @@ var messaging = (function () {
                     loadMessages(currentConversationId);
                 }
             }
-            // Always refresh the sidebar unread counts.
-            loadSidebar();
+
+            // Update the sidebar item in-place: bump timestamp and unread badge.
+            if (data.conversation_id) {
+                var convId = data.conversation_id;
+                var item = document.querySelector('.msg-conv-item[data-conv-id="' + convId + '"]');
+                if (item) {
+                    // Bump timestamp
+                    var timeEl = item.querySelector('.msg-conv-time');
+                    if (timeEl && data.message && data.message.created_at) {
+                        timeEl.textContent = formatTime(data.message.created_at);
+                    }
+                    // Increment unread badge (only if this isn't the open conversation)
+                    if (convId !== currentConversationId) {
+                        var badge = item.querySelector('.msg-unread-badge');
+                        if (badge) {
+                            badge.textContent = (parseInt(badge.textContent, 10) || 0) + 1;
+                        } else {
+                            var meta = item.querySelector('.msg-conv-meta');
+                            if (meta) {
+                                var newBadge = document.createElement('span');
+                                newBadge.className = 'msg-unread-badge';
+                                newBadge.textContent = '1';
+                                // Insert before the star button
+                                var star = meta.querySelector('.msg-fav-star');
+                                meta.insertBefore(newBadge, star);
+                            }
+                        }
+                        // Move item to the top of its list
+                        if (item.parentNode) {
+                            item.parentNode.insertBefore(item, item.parentNode.firstChild);
+                        }
+                    }
+                } else {
+                    // Conversation not in sidebar yet (new DM from someone) - reload
+                    loadSidebar();
+                }
+            }
         }
     };
 })();

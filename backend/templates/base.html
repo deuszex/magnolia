@@ -92,6 +92,8 @@
             <a href="#preferences" class="menu-item">Messaging Preferences</a>
             <a href="#blacklist" class="menu-item">Blocked Users</a>
             <a href="#calls" class="menu-item">Call History</a>
+            <a href="#security" class="menu-item">Security</a>
+            <a href="#proxy" class="menu-item" id="btn-proxy-account">Proxy Account</a>
             <a href="#theme" class="menu-item">Appearance</a>
             <a href="#federation" class="menu-item">Federation</a>
             <a id="btn-admin-panel" href="#admin/users" class="menu-item" style="display:none">Admin Panel</a>
@@ -244,8 +246,11 @@
 
         <!-- Chat modal (fixed bottom-right) -->
         <div id="chat-modal" class="chat-modal" style="display:none">
+            <div class="chat-modal-resize-handle" id="chat-modal-resize-handle"></div>
             <div class="chat-modal-header">
-                <span id="chat-modal-title" class="chat-title">Chat</span>
+                <button id="chat-modal-title" class="chat-title chat-title-btn" title="Conversation info">Chat</button>
+                <!-- Conversation metadata panel (shown on title click) -->
+                <div id="chat-info-panel" class="chat-info-panel" style="display:none"></div>
                 <div class="chat-tabs">
                     <button class="chat-tab active" data-tab="chat">Chat</button>
                     <button class="chat-tab" data-tab="media">Media</button>
@@ -254,7 +259,7 @@
                 <div class="chat-modal-controls">
                     <button id="btn-chat-voice-call" class="btn-icon" title="Voice call">&#128222;</button>
                     <button id="btn-chat-video-call" class="btn-icon" title="Video call">&#127909;</button>
-                    <button id="btn-chat-resize" class="btn-icon" title="Resize">&#8597;</button>
+                    <button id="btn-chat-resize" class="btn-icon" title="Expand/collapse">&#10021;</button>
                     <button id="btn-chat-close" class="btn-icon" title="Close">&times;</button>
                 </div>
             </div>

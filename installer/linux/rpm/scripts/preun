@@ -23,5 +23,5 @@ if [ "$1" -eq 0 ]; then
     echo "Remove these manually if no longer needed."
 fi
 
-# On upgrade ($1 = 1), systemd handles the service transition automatically —
-# the new package's %post scriptlet will restart it.
+# On upgrade ($1 = 1), systemd handles the service transition automatically
+# The new package's %post scriptlet will restart it.

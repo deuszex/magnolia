@@ -8,12 +8,30 @@ pub async fn create_pool(database_url: &str) -> Result<AnyPool, Error> {
 
     // SQLite: ensure the database file exists before connecting
     if database_url.starts_with("sqlite:") {
-        let path_str = database_url
-            .trim_start_matches("sqlite://")
-            .trim_start_matches("sqlite:");
+        // Strip URL scheme, handling sqlite:path, sqlite://path, sqlite:///path.
+        // Strip query string (?mode=rwc etc.) before passing to Path.
+        let raw = database_url
+            .strip_prefix("sqlite:///")
+            .or_else(|| database_url.strip_prefix("sqlite://"))
+            .or_else(|| database_url.strip_prefix("sqlite:"))
+            .unwrap_or(database_url);
+        // Strip query string if present
+        let raw = raw.split('?').next().unwrap_or(raw);
+        // On Windows a URI absolute path arrives as "/C:\..." or "/C:/...";
+        // strip the leading slash when the next char is a drive letter.
+        #[cfg(windows)]
+        let path_str = if raw.starts_with('/') && raw.len() >= 3 && raw.chars().nth(2) == Some(':')
+        {
+            &raw[1..]
+        } else {
+            raw
+        };
+        #[cfg(not(windows))]
+        let path_str = raw;
         let db_path = Path::new(path_str);
         if let Some(parent) = db_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
+                println!("Trying to create: {parent:?}");
                 std::fs::create_dir_all(parent).map_err(|e| {
                     sqlx::Error::Configuration(
                         format!("Failed to create database directory: {}", e).into(),
@@ -23,6 +41,7 @@ pub async fn create_pool(database_url: &str) -> Result<AnyPool, Error> {
         }
         if !db_path.exists() {
             std::fs::File::create(db_path).map_err(|e| {
+                println!("Trying to create: {db_path:?}");
                 sqlx::Error::Configuration(format!("Failed to create database file: {}", e).into())
             })?;
         }
@@ -56,12 +75,8 @@ async fn run_migrations(pool: &AnyPool) -> Result<(), Error> {
             include_str!("../migrations/001_user_accounts.sql"),
         ),
         (
-            "002_sessions",
-            include_str!("../migrations/002_sessions.sql"),
-        ),
-        (
-            "003_email_verifications",
-            include_str!("../migrations/003_email_verifications.sql"),
+            "002_known_devices",
+            include_str!("../migrations/002_known_devices.sql"),
         ),
         (
             "004_password_resets",
@@ -219,8 +234,22 @@ async fn run_migrations(pool: &AnyPool) -> Result<(), Error> {
             "045_stun_servers",
             include_str!("../migrations/045_stun_servers.sql"),
         ),
+        (
+            "046_proxy_accounts",
+            include_str!("../migrations/046_proxy_accounts.sql"),
+        ),
+        (
+            "047_proxy_sessions",
+            include_str!("../migrations/047_proxy_sessions.sql"),
+        ),
+        (
+            "048_proxy_rate_limits",
+            include_str!("../migrations/048_proxy_rate_limits.sql"),
+        ),
     ];
+
     println!("Pushing migrations into DB:");
+
     for (name, migration) in migrations {
         println!("- {name}");
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _migrations WHERE name = $1")

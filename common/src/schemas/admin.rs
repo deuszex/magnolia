@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-/// Full admin view of a user — includes status flags
+/// Full admin view of a user, includes status flags
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminUserListItem {
     pub user_id: String,
@@ -43,7 +43,7 @@ pub struct AdminCreateUserRequest {
 
     pub email: Option<String>,
 
-    #[validate(length(min = 8, max = 128))]
+    #[validate(length(min = 12, max = 128))]
     pub password: String,
 
     #[serde(default)]
@@ -70,7 +70,7 @@ pub struct AdminUpdateUserRequest {
 pub struct CreateInviteRequest {
     /// Optionally bind the invite to a specific email address
     pub email: Option<String>,
-    /// Expiry in hours — defaults to 168 (7 days)
+    /// Expiry in hours, defaults to 168 (7 days)
     pub expires_hours: Option<i64>,
 }
 
@@ -106,7 +106,7 @@ pub struct InviteListQuery {
 pub struct SendEmailInvitesRequest {
     /// List of email addresses to invite
     pub emails: Vec<String>,
-    /// Expiry in hours — defaults to 168 (7 days)
+    /// Expiry in hours, defaults to 168 (7 days)
     pub expires_hours: Option<i64>,
     /// Optional personal message to include in the invitation email
     pub message: Option<String>,
@@ -123,8 +123,16 @@ pub struct SendEmailInvitesResponse {
 /// Submit a registration application (public endpoint, application mode only)
 #[derive(Debug, Deserialize, Validate)]
 pub struct SubmitApplicationRequest {
+    /// Required login handle
+    #[validate(length(min = 3, max = 30))]
+    pub username: String,
+
+    /// Optional contact email
     #[validate(email)]
-    pub email: String,
+    pub email: Option<String>,
+
+    #[validate(length(min = 12, max = 128))]
+    pub password: Option<String>,
 
     #[validate(length(max = 50))]
     pub display_name: Option<String>,
@@ -136,7 +144,8 @@ pub struct SubmitApplicationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationResponse {
     pub application_id: String,
-    pub email: String,
+    pub username: Option<String>,
+    pub email: Option<String>,
     pub display_name: Option<String>,
     pub message: Option<String>,
     pub status: String,
@@ -159,7 +168,7 @@ pub struct ApplicationListQuery {
     pub limit: i64,
     #[serde(default)]
     pub offset: i64,
-    /// Filter by status: 'pending', 'approved', 'denied', 'expired' — omit for all
+    /// Filter by status: 'pending', 'approved', 'denied', 'expired', `None` for all
     pub status: Option<String>,
 }
 
@@ -167,8 +176,8 @@ pub struct ApplicationListQuery {
 #[derive(Debug, Serialize)]
 pub struct ApproveApplicationResponse {
     pub user_id: String,
-    pub email: String,
-    /// Password setup link — only present when SMTP is not configured (admin must share manually)
+    pub email: Option<String>,
+    /// Password setup link, only present when SMTP is not configured (admin must share manually)
     pub setup_link: Option<String>,
     pub email_sent: bool,
 }

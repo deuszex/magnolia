@@ -18,16 +18,18 @@ impl MessageRepository {
         sqlx::query(
             r#"INSERT INTO messages
                (message_id, conversation_id, sender_id, remote_sender_qualified_id,
-                encrypted_content, created_at, federated_status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+                proxy_sender_id, encrypted_content, created_at, federated_status, content_nonce)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
         .bind(&message.message_id)
         .bind(&message.conversation_id)
         .bind(&message.sender_id)
         .bind(&message.remote_sender_qualified_id)
+        .bind(&message.proxy_sender_id)
         .bind(&message.encrypted_content)
         .bind(&message.created_at)
         .bind(&message.federated_status)
+        .bind(&message.content_nonce)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -57,7 +59,7 @@ impl MessageRepository {
     pub async fn get_by_id(&self, message_id: &str) -> Result<Option<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             r#"SELECT message_id, conversation_id, sender_id, remote_sender_qualified_id,
-                      encrypted_content, created_at, federated_status
+                      proxy_sender_id, encrypted_content, created_at, federated_status, content_nonce
                FROM messages WHERE message_id = $1"#,
         )
         .bind(message_id)
@@ -73,7 +75,7 @@ impl MessageRepository {
     ) -> Result<Vec<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             r#"SELECT message_id, conversation_id, sender_id, remote_sender_qualified_id,
-                      encrypted_content, created_at, federated_status
+                      proxy_sender_id, encrypted_content, created_at, federated_status, content_nonce
                FROM messages WHERE conversation_id = $1
                ORDER BY created_at ASC
                LIMIT $2 OFFSET $3"#,

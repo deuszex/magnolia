@@ -42,13 +42,28 @@ Source: "..\..\target\release\service_ctl.exe"; DestDir: "{app}"; DestName: "mag
 Source: "..\..\target\release\create_admin.exe"; DestDir: "{app}"; DestName: "magnolia-create-admin.exe"; Flags: ignoreversion
 
 [Dirs]
-Name: "{commonappdata}\Magnolia"; Permissions: admins-full
-Name: "{commonappdata}\Magnolia\uploads\images"; Permissions: admins-full
-Name: "{commonappdata}\Magnolia\logs"; Permissions: admins-full
+; system-full gives the LocalSystem service account write access.
+; admins-full lets administrators run the binary or admin tools manually.
+Name: "{commonappdata}\Magnolia"; Permissions: system-full admins-full
+Name: "{commonappdata}\Magnolia\uploads"; Permissions: system-full admins-full
+Name: "{commonappdata}\Magnolia\uploads\images"; Permissions: system-full admins-full
+Name: "{commonappdata}\Magnolia\logs"; Permissions: system-full admins-full
+
+[Run]
+; Add Windows Firewall inbound rule for the server port.
+; Declared in [Run] so Inno Setup owns the operation (recognized installer context).
+; The {code:GetServerPort} call reads the port from the wizard at install time.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""Magnolia Server"""; \
+  Flags: runhidden; Description: "Remove old firewall rule (if any)"
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall add rule name=""Magnolia Server"" dir=in action=allow protocol=TCP localport={code:GetServerPort} program=""{app}\magnolia_server.exe"" description=""Magnolia self-hosted social platform"""; \
+  Flags: runhidden; Description: "Add firewall rule for Magnolia Server port"
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop {#ServiceName}"; RunOnceId: "StopService"; Flags: runhidden
 Filename: "{sys}\sc.exe"; Parameters: "delete {#ServiceName}"; RunOnceId: "DeleteService"; Flags: runhidden
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Magnolia Server"""; RunOnceId: "RemoveFirewall"; Flags: runhidden
 
 [Code]
 
@@ -89,7 +104,9 @@ begin
  'Configure the database connection.',
  'Leave as default to use SQLite (recommended for most installs).');
  PageDatabase.Add('Database URL:', False);
- PageDatabase.Values[0] := 'sqlite:///' + ExpandConstant('{commonappdata}') + '\Magnolia\magnolia.db';
+ // sqlite: + path (no slashes) avoids the URI triple-slash ambiguity on Windows.
+ // Forward slashes in the path work fine with SQLite on Windows.
+ PageDatabase.Values[0] := 'sqlite:' + ExpandConstant('{commonappdata}') + '/Magnolia/magnolia.db';
 
  // Page 3: SMTP (optional)
  PageSmtp := CreateInputQueryPage(PageDatabase.ID,
@@ -131,7 +148,7 @@ begin
  'Create the first admin account. Leave blank to skip.',
  'You can create an admin account later with: magnolia-create-admin.exe --email you@example.com');
  PageAdmin.Add('Admin email address:', False);
- PageAdmin.Add('Admin password (Min 12 characters, 1 number, 1 symbol (?!$...)):', True);
+ PageAdmin.Add('Admin password (12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...)):', True);
 end;
 
 // Validate pages before advancing 
@@ -171,7 +188,7 @@ begin
  begin
  if (Trim(PageAdmin.Values[0]) <> '') and (Length(PageAdmin.Values[1]) < 8) then
  begin
- MsgBox('Admin password must be at least 8 characters.', mbError, MB_OK);
+ MsgBox('Admin password must be at least 12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...).', mbError, MB_OK);
  Result := False;
  end;
  end;
@@ -430,7 +447,13 @@ begin
  mbInformation, MB_OK);
 end;
 
-// Main post-install logic 
+// Called by the [Run] section to get the port number chosen in the wizard
+function GetServerPort(Param: String): String;
+begin
+ Result := Trim(PageServer.Values[2]);
+end;
+
+// Main post-install logic
 procedure CurStepChanged(CurStep: TSetupStep);
 var
  ConfFile, AppDir, DbUrl: String;

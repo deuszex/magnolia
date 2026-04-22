@@ -7,7 +7,11 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct RegisterApplication {
     pub application_id: String,
-    pub email: String,
+    /// Required login handle chosen by the applicant
+    pub username: Option<String>,
+    /// Optional email address
+    pub email: Option<String>,
+    pub password: Option<String>,
     pub display_name: Option<String>,
     /// Optional motivation message from the applicant
     pub message: Option<String>,
@@ -21,7 +25,9 @@ pub struct RegisterApplication {
 
 impl RegisterApplication {
     pub fn new(
-        email: String,
+        username: String,
+        email: Option<String>,
+        password: Option<String>,
         display_name: Option<String>,
         message: Option<String>,
         timeout_hours: i64,
@@ -30,7 +36,9 @@ impl RegisterApplication {
         let expires_at = now + chrono::Duration::hours(timeout_hours);
         Self {
             application_id: format!("app-{}", Uuid::new_v4()),
+            username: Some(username),
             email,
+            password,
             display_name,
             message,
             status: "pending".to_string(),

@@ -18,7 +18,6 @@ use super::{
 use crate::config::Settings;
 use crate::utils::encryption::ContentEncryption;
 use magnolia_common::repositories::MessageRepository;
-use magnolia_common::repositories::message_repository::FederatedQueueEntry;
 
 /// Called fire-and-forget after a local message is stored.
 /// Enqueues an outbound delivery entry for each federated member then spawns
@@ -67,11 +66,9 @@ pub async fn forward_message_to_peers(
             .ok()
             .flatten()
             .filter(|u: &String| !u.is_empty());
-    let sender_qualified_id =
-        format!("{}@{}", sender_name.as_deref().unwrap_or(&sender_id), host);
+    let sender_qualified_id = format!("{}@{}", sender_name.as_deref().unwrap_or(&sender_id), host);
 
-    let attachments_json =
-        serde_json::to_string(&attachments).unwrap_or_else(|_| "[]".to_string());
+    let attachments_json = serde_json::to_string(&attachments).unwrap_or_else(|_| "[]".to_string());
     let msg_repo = MessageRepository::new(pool.clone());
 
     for member in members {
@@ -114,7 +111,8 @@ pub async fn forward_message_to_peers(
             continue;
         }
 
-        // Spawn delivery — each peer gets its own task/stack frame.
+        // Spawn delivery, because each peer gets its own task/stack frame,
+        // this might waste stack if futures are queued endlessly.
         tokio::spawn(deliver_queue_entry(
             pool.clone(),
             Arc::clone(&settings),
@@ -222,9 +220,21 @@ pub async fn deliver_queue_entry(
     let our_address = settings.base_url.trim_end_matches('/');
     let _ = msg_repo.record_attempt(&queue_id).await;
 
-    match client::send_message(&client, &identity, our_address, &conn_address, envelope, &shared_secret).await {
+    match client::send_message(
+        &client,
+        &identity,
+        our_address,
+        &conn_address,
+        envelope,
+        &shared_secret,
+    )
+    .await
+    {
         Ok(()) => {
-            info!("deliver_queue_entry: delivered {} to {}", queue_id, conn_address);
+            info!(
+                "deliver_queue_entry: delivered {} to {}",
+                queue_id, conn_address
+            );
             if let Err(e) = msg_repo.mark_queue_delivered(&queue_id).await {
                 error!("deliver_queue_entry: mark delivered failed: {}", e);
             }
@@ -234,7 +244,8 @@ pub async fn deliver_queue_entry(
                 "deliver_queue_entry: send to {} failed (will retry on reconnect): {}",
                 conn_address, e
             );
-            // Queue entry stays 'pending' — drain_pending_for_peer picks it up on reconnect.
+            // Queue entry stays 'pending' in case the receiving side is offline or unavailable,
+            // drain_pending_for_peer picks it up on reconnect.
         }
     }
 }
@@ -279,8 +290,9 @@ pub async fn drain_pending_for_peer(
         let attachments: Vec<FederatedMediaRef> =
             serde_json::from_str(&entry.attachments_json).unwrap_or_default();
 
-        // Await each delivery before starting the next — the receiver's SQLite can only
+        // Await each delivery before starting the next, the receiver's SQLite can only
         // handle one writer at a time, so sequential delivery prevents lock contention.
+        // This is not a "big brain design" but a "oopsie daisy" inspired decision.
         deliver_queue_entry(
             pool.clone(),
             Arc::clone(&settings),

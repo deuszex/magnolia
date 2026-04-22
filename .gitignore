@@ -1,6 +1,8 @@
 # Build artifacts
-*/target/
+/target/
 **/*.rs.bk
+Cargo.lock
+obj
 
 .env
 !.env.example

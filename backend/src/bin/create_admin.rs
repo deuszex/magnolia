@@ -18,6 +18,8 @@ async fn main() {
     // Load from standard locations; failures are non-fatal
     dotenvy::dotenv().ok();
     dotenvy::from_path("/etc/magnolia/magnolia.env").ok();
+    #[cfg(windows)]
+    dotenvy::from_path(r"C:\ProgramData\Magnolia\magnolia.env").ok();
 
     let args: Vec<String> = std::env::args().collect();
 

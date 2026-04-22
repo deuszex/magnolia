@@ -31,6 +31,10 @@ use magnolia_common::schemas::{
 type AppState = (AnyPool, Arc<Settings>);
 
 /// Get the configured media storage base path, falling back to "./media_storage".
+pub async fn get_storage_base_pub(pool: &AnyPool) -> String {
+    get_storage_base(pool).await
+}
+
 async fn get_storage_base(pool: &AnyPool) -> String {
     let repo = SiteConfigRepository::new(pool.clone());
     match repo.get().await {
@@ -242,6 +246,7 @@ pub async fn upload_media(
         is_fetching: 0,
         created_at: now.clone(),
         updated_at: now,
+        proxy_owner_id: None,
     };
 
     repo.create(&media).await.map_err(|e| {
@@ -501,6 +506,7 @@ pub async fn complete_chunked_upload(
         is_fetching: 0,
         created_at: now.clone(),
         updated_at: now,
+        proxy_owner_id: None,
     };
 
     repo.create(&media).await.map_err(|e| {
@@ -612,7 +618,14 @@ async fn fetch_and_cache_federated_media(
             let file_hash = hex::encode(Sha256::digest(&bytes));
             let now_str = chrono::Utc::now().to_rfc3339();
             let _ = repo
-                .mark_cached(&media.media_id, &storage_path, None, &file_hash, None, &now_str)
+                .mark_cached(
+                    &media.media_id,
+                    &storage_path,
+                    None,
+                    &file_hash,
+                    None,
+                    &now_str,
+                )
                 .await;
             repo.get_by_id(&media.media_id)
                 .await
@@ -636,7 +649,9 @@ pub async fn serve_media_file(
     State((pool, settings)): State<AppState>,
     axum::Extension(auth): axum::Extension<AuthMiddleware>,
     axum::Extension(s2s_client): axum::Extension<crate::federation::client::S2SClient>,
-    axum::Extension(server_identity): axum::Extension<Arc<crate::federation::identity::ServerIdentity>>,
+    axum::Extension(server_identity): axum::Extension<
+        Arc<crate::federation::identity::ServerIdentity>,
+    >,
     Path(media_id): Path<String>,
 ) -> Result<Response, AppError> {
     let repo = MediaRepository::new(pool.clone());
@@ -652,7 +667,10 @@ pub async fn serve_media_file(
 
     // Block check for local (non-federated) media.
     if media.owner_id != "__fed__" {
-        match repo.is_blocked_local(&media.owner_id, &auth.user.user_id).await {
+        match repo
+            .is_blocked_local(&media.owner_id, &auth.user.user_id)
+            .await
+        {
             Ok(true) => return Err(AppError::Forbidden),
             Ok(false) => {}
             Err(e) => {
@@ -662,7 +680,7 @@ pub async fn serve_media_file(
         }
     }
 
-    // Lazy-fetch uncached federated stubs — runs in its own task to keep this future small.
+    // Lazy-fetch uncached federated stubs, runs in its own task to keep this future small.
     let media = if media.is_cached == 0 {
         match tokio::spawn(fetch_and_cache_federated_media(
             pool.clone(),
@@ -676,7 +694,7 @@ pub async fn serve_media_file(
         {
             Ok(Ok(m)) => m,
             Ok(Err(AppError::BadRequest(_))) => {
-                // claim_fetching returned false — another fetch is in progress.
+                // claim_fetching returned false, another fetch is in progress.
                 return Response::builder()
                     .status(StatusCode::SERVICE_UNAVAILABLE)
                     .header("Retry-After", "2")
@@ -703,9 +721,15 @@ pub async fn serve_media_file(
     };
 
     let disposition = if media.media_type == "image" || media.media_type == "video" {
-        format!("inline; filename=\"{}\"", media.filename.replace('"', "\\\""))
+        format!(
+            "inline; filename=\"{}\"",
+            media.filename.replace('"', "\\\"")
+        )
     } else {
-        format!("attachment; filename=\"{}\"", media.filename.replace('"', "\\\""))
+        format!(
+            "attachment; filename=\"{}\"",
+            media.filename.replace('"', "\\\"")
+        )
     };
 
     Response::builder()
@@ -740,7 +764,10 @@ pub async fn serve_thumbnail(
 
     // Block check for local media.
     if media.owner_id != "__fed__" {
-        match repo.is_blocked_local(&media.owner_id, &auth.user.user_id).await {
+        match repo
+            .is_blocked_local(&media.owner_id, &auth.user.user_id)
+            .await
+        {
             Ok(true) => return Err(AppError::Forbidden),
             Ok(false) => {}
             Err(e) => {
@@ -750,7 +777,7 @@ pub async fn serve_thumbnail(
         }
     }
 
-    // Federated stubs with no thumbnail yet — just 404; client should use the file URL.
+    // Federated stubs with no thumbnail yet, just 404; client should use the file URL.
     if media.is_cached == 0 {
         return Err(AppError::NotFound("Thumbnail not yet cached".to_string()));
     }
@@ -863,7 +890,7 @@ pub async fn list_media(
         })
         .collect();
 
-    let total = items.len() as i64; // TODO: Get actual total count
+    let total = items.len() as i64;
     let has_more = items.len() as i32 >= params.limit;
 
     Ok(Json(MediaListResponse {

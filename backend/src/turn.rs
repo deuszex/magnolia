@@ -16,8 +16,7 @@ pub struct TurnConfig {
 
 impl TurnConfig {
     pub fn from_env() -> Result<Self, String> {
-        let enabled =
-            env::var("TURN_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true";
+        let enabled = env::var("TURN_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true";
 
         if !enabled {
             return Ok(TurnConfig {
@@ -79,8 +78,7 @@ pub fn generate_turn_credentials(
 
 /// Start the embedded TURN server as a background Tokio task.
 ///
-/// Currently a placeholder — the actual TURN server implementation depends on
-/// selecting and integrating a TURN crate (e.g. `turn-rs` SDK or `webrtc-turn`).
+/// SStill a placeholder, but the currently available projects don't hit the mark, so TODO another project a TURN library.
 /// When TURN_ENABLED=false (default), this is a no-op.
 pub async fn start_turn_server(config: &TurnConfig) {
     if !config.enabled {

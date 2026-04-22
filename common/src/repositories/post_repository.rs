@@ -37,8 +37,8 @@ impl PostRepository {
         sqlx::query(
             r#"
  INSERT INTO post_contents (content_id, post_id, content_type, display_order, content,
- thumbnail_path, original_filename, mime_type, file_size, created_at)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ thumbnail_path, original_filename, mime_type, file_size, created_at, content_nonce)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
  "#,
         )
         .bind(&content.content_id)
@@ -51,6 +51,7 @@ impl PostRepository {
         .bind(&content.mime_type)
         .bind(content.file_size)
         .bind(&content.created_at)
+        .bind(&content.content_nonce)
         .execute(&self.pool)
         .await?;
 

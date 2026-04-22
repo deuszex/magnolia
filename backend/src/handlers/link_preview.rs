@@ -259,7 +259,7 @@ async fn fetch_preview(
         return Ok((None, None, None));
     }
 
-    // Read at most 64 KB — enough to cover any <head> section
+    // Read at most 64 KB, enough to cover any <head> section
     let bytes = response.bytes().await?;
     let truncated = &bytes[..bytes.len().min(65536)];
     let html = String::from_utf8_lossy(truncated);

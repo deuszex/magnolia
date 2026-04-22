@@ -17,11 +17,13 @@ impl RegisterApplicationRepository {
     pub async fn create(&self, app: &RegisterApplication) -> Result<(), AppError> {
         sqlx::query(
  r#"INSERT INTO register_applications
- (application_id, email, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+ (application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
  )
  .bind(&app.application_id)
+ .bind(&app.username)
  .bind(&app.email)
+ .bind(&app.password)
  .bind(&app.display_name)
  .bind(&app.message)
  .bind(&app.status)
@@ -36,10 +38,27 @@ impl RegisterApplicationRepository {
 
     pub async fn find_by_id(&self, id: &str) -> Result<Option<RegisterApplication>, AppError> {
         let app = sqlx::query_as::<_, RegisterApplication>(
- r#"SELECT application_id, email, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
+ r#"SELECT application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
  FROM register_applications WHERE application_id = $1"#,
  )
  .bind(id)
+ .fetch_optional(&self.pool)
+ .await?;
+        Ok(app)
+    }
+
+    /// Find the most recent pending application for a username
+    pub async fn find_pending_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<RegisterApplication>, AppError> {
+        let app = sqlx::query_as::<_, RegisterApplication>(
+ r#"SELECT application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
+ FROM register_applications
+ WHERE username = $1 AND status = 'pending'
+ ORDER BY created_at DESC LIMIT 1"#,
+ )
+ .bind(username)
  .fetch_optional(&self.pool)
  .await?;
         Ok(app)
@@ -51,7 +70,7 @@ impl RegisterApplicationRepository {
         email: &str,
     ) -> Result<Option<RegisterApplication>, AppError> {
         let app = sqlx::query_as::<_, RegisterApplication>(
- r#"SELECT application_id, email, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
+ r#"SELECT application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
  FROM register_applications
  WHERE email = $1 AND status = 'pending'
  ORDER BY created_at DESC LIMIT 1"#,
@@ -71,7 +90,7 @@ impl RegisterApplicationRepository {
     ) -> Result<(Vec<RegisterApplication>, i64), AppError> {
         let apps = if let Some(s) = status {
             sqlx::query_as::<_, RegisterApplication>(
- r#"SELECT application_id, email, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
+ r#"SELECT application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
  FROM register_applications WHERE status = $1
  ORDER BY created_at DESC LIMIT $2 OFFSET $3"#,
  )
@@ -82,7 +101,7 @@ impl RegisterApplicationRepository {
  .await?
         } else {
             sqlx::query_as::<_, RegisterApplication>(
- r#"SELECT application_id, email, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
+ r#"SELECT application_id, username, email, password, display_name, message, status, created_at, expires_at, reviewed_at, reviewed_by
  FROM register_applications
  ORDER BY created_at DESC LIMIT $1 OFFSET $2"#,
  )

@@ -93,14 +93,17 @@ impl UserRepository {
     pub async fn create_session(&self, session: &Session) -> Result<(), AppError> {
         sqlx::query(
             r#"
- INSERT INTO sessions (session_id, user_id, expires_at, created_at)
- VALUES ($1, $2, $3, $4)
+ INSERT INTO sessions (session_id, user_id, expires_at, created_at, ip_address, user_agent, fingerprint)
+ VALUES ($1, $2, $3, $4, $5, $6, $7)
  "#,
         )
         .bind(&session.session_id)
         .bind(&session.user_id)
         .bind(&session.expires_at)
         .bind(&session.created_at)
+        .bind(&session.ip_address)
+        .bind(&session.user_agent)
+        .bind(&session.fingerprint)
         .execute(&self.pool)
         .await?;
 
@@ -110,7 +113,7 @@ impl UserRepository {
     pub async fn find_session(&self, session_id: &str) -> Result<Option<Session>, AppError> {
         let session = sqlx::query_as::<_, Session>(
             r#"
- SELECT session_id, user_id, expires_at, created_at
+ SELECT session_id, user_id, expires_at, created_at, ip_address, user_agent, fingerprint
  FROM sessions
  WHERE session_id = $1
  "#,
@@ -120,6 +123,104 @@ impl UserRepository {
         .await?;
 
         Ok(session)
+    }
+
+    pub async fn list_sessions_for_user(&self, user_id: &str) -> Result<Vec<Session>, AppError> {
+        let sessions = sqlx::query_as::<_, Session>(
+            r#"
+ SELECT session_id, user_id, expires_at, created_at, ip_address, user_agent, fingerprint
+ FROM sessions
+ WHERE user_id = $1
+ ORDER BY created_at DESC
+ "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(sessions)
+    }
+
+    /// Delete a specific session, verifying it belongs to user_id.
+    pub async fn delete_session_for_user(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            r#"
+ DELETE FROM sessions
+ WHERE session_id = $1 AND user_id = $2
+ "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Check whether this fingerprint has ever been seen for this user (persists across logouts).
+    pub async fn fingerprint_known_for_user(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+    ) -> Result<bool, AppError> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM known_devices WHERE user_id = $1 AND fingerprint = $2",
+        )
+        .bind(user_id)
+        .bind(fingerprint)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count > 0)
+    }
+
+    /// Remove a known device entry (e.g. when user revokes a suspicious session).
+    pub async fn remove_known_device(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+    ) -> Result<(), AppError> {
+        sqlx::query("DELETE FROM known_devices WHERE user_id = $1 AND fingerprint = $2")
+            .bind(user_id)
+            .bind(fingerprint)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Record a device fingerprint as known. Updates last_seen_at and ip/ua if already exists.
+    pub async fn upsert_known_device(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+ INSERT INTO known_devices (id, user_id, fingerprint, ip_address, user_agent, first_seen_at, last_seen_at)
+ VALUES ($1, $2, $3, $4, $5, $6, $6)
+ ON CONFLICT (user_id, fingerprint) DO UPDATE
+ SET last_seen_at = $6, ip_address = $4, user_agent = $5
+ "#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(fingerprint)
+        .bind(ip_address)
+        .bind(user_agent)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), AppError> {
@@ -144,61 +245,6 @@ impl UserRepository {
  "#,
         )
         .bind(user_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    // Email verification operations
-    pub async fn create_verification_token(
-        &self,
-        token: &EmailVerification,
-    ) -> Result<(), AppError> {
-        sqlx::query(
-            r#"
- INSERT INTO email_verifications (token, user_id, expires_at, used, created_at)
- VALUES ($1, $2, $3, $4, $5)
- "#,
-        )
-        .bind(&token.token)
-        .bind(&token.user_id)
-        .bind(&token.expires_at)
-        .bind(token.used)
-        .bind(&token.created_at)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn find_verification_token(
-        &self,
-        token: &str,
-    ) -> Result<Option<EmailVerification>, AppError> {
-        let verification = sqlx::query_as::<_, EmailVerification>(
-            r#"
- SELECT token, user_id, expires_at, used, created_at
- FROM email_verifications
- WHERE token = $1
- "#,
-        )
-        .bind(token)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(verification)
-    }
-
-    pub async fn mark_token_used(&self, token: &str) -> Result<(), AppError> {
-        sqlx::query(
-            r#"
- UPDATE email_verifications
- SET used = TRUE
- WHERE token = $1
- "#,
-        )
-        .bind(token)
         .execute(&self.pool)
         .await?;
 
@@ -487,7 +533,7 @@ impl UserRepository {
         Ok(())
     }
 
-    /// Find user by email OR username — used for login with either identifier.
+    /// Find user by email OR username, used for login with either identifier.
     pub async fn find_by_identifier(
         &self,
         identifier: &str,
@@ -561,7 +607,7 @@ impl UserRepository {
         Ok(())
     }
 
-    /// Fetch only the E2E key blob for a user (lightweight — avoids loading the full row)
+    /// Fetch only the E2E key blob for a user (lightweight, avoids loading the full row)
     pub async fn get_e2e_key_blob(&self, user_id: &str) -> Result<Option<String>, AppError> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT e2e_key_blob FROM user_accounts WHERE user_id = $1")
@@ -585,16 +631,72 @@ impl UserRepository {
         Ok(())
     }
 
+    // Password-reset signing key operations
+
+    /// Return the stored HMAC signing key for a user (raw base64), if any.
+    pub async fn get_password_reset_signing_key(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT password_reset_signing_key FROM user_accounts WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(k,)| k))
+    }
+
+    /// Persist a new HMAC signing key for the user (replaces any previous key).
+    pub async fn set_password_reset_signing_key(
+        &self,
+        user_id: &str,
+        key_b64: &str,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE user_accounts SET password_reset_signing_key = $1, updated_at = $2 WHERE user_id = $3",
+        )
+        .bind(key_b64)
+        .bind(&now)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Remove the signing key, disabling key-based password reset for the user.
+    pub async fn clear_password_reset_signing_key(&self, user_id: &str) -> Result<(), AppError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE user_accounts SET password_reset_signing_key = NULL, updated_at = $1 WHERE user_id = $2",
+        )
+        .bind(&now)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Find a user whose stored signing key matches (used during key-based reset).
+    /// Returns the user_id if found; the caller must also verify the HMAC signature.
+    pub async fn find_by_id_with_signing_key(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, AppError> {
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT user_id, password_reset_signing_key FROM user_accounts WHERE user_id = $1 AND active = 1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Delete a user account and all related data
     pub async fn delete_user(&self, user_id: &str) -> Result<(), AppError> {
         // Delete sessions
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-
-        // Delete email verifications
-        sqlx::query("DELETE FROM email_verifications WHERE user_id = $1")
             .bind(user_id)
             .execute(&self.pool)
             .await?;

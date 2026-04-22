@@ -13,7 +13,9 @@ use crate::middleware::auth::AuthMiddleware;
 use crate::turn;
 use magnolia_common::errors::AppError;
 use magnolia_common::models::{Call, CallParticipant};
-use magnolia_common::repositories::{CallRepository, ConversationRepository, StunServerRepository, UserRepository};
+use magnolia_common::repositories::{
+    CallRepository, ConversationRepository, StunServerRepository, UserRepository,
+};
 use magnolia_common::schemas::{
     CallHistoryEntry, CallHistoryQuery, CallHistoryResponse, CallParticipantResponse, CallResponse,
     IceConfigResponse, IceServer, InitiateCallRequest,
@@ -51,11 +53,8 @@ pub async fn get_ice_config(
         }
     };
     if turn_config.enabled {
-        let (username, credential) = turn::generate_turn_credentials(
-            &auth.user.user_id,
-            &turn_config.auth_secret,
-            86400,
-        );
+        let (username, credential) =
+            turn::generate_turn_credentials(&auth.user.user_id, &turn_config.auth_secret, 86400);
         ice_servers.push(IceServer {
             urls: vec![
                 format!("turn:{}:3478", turn_config.external_ip),

@@ -110,7 +110,9 @@ pub async fn fetch_and_store_posts_from_peer(
         // feed handler and clients can resolve media without knowing the remote address.
         for c in &mut entry.contents {
             if let Some(ref mut att) = c.media_ref {
-                let local_id = match media_repo.find_by_origin(&peer_address, &att.media_id).await
+                let local_id = match media_repo
+                    .find_by_origin(&peer_address, &att.media_id)
+                    .await
                 {
                     Ok(Some(existing)) => existing.media_id,
                     _ => {

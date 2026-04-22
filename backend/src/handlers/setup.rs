@@ -28,7 +28,7 @@ pub struct SetupRequest {
 /// Returns whether the server needs initial setup (no users exist yet).
 pub async fn setup_status(State((pool, _)): State<AppState>) -> impl IntoResponse {
     let count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__'",
+        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__' AND user_id != '__proxy__'",
     )
     .fetch_one(&pool)
     .await
@@ -47,7 +47,7 @@ pub async fn setup(
 ) -> Result<(StatusCode, Json<MessageResponse>), AppError> {
     // Guard: this endpoint is a one-time operation
     let count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__'",
+        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__' AND user_id != '__proxy__'",
     )
     .fetch_one(&pool)
     .await

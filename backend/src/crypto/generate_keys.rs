@@ -1,9 +1,9 @@
-use aes_gcm::{Aes256Gcm,KeyInit};
-use ml_dsa::{
-    KeyGen, KeyPair, MlDsa87, 
-};
+use aes_gcm::{Aes256Gcm, KeyInit};
+use ml_dsa::{KeyGen, KeyPair, MlDsa87};
 use ml_kem::{
-    ArraySize, B32, Ciphertext, FromSeed, KeyExport, MlKem1024, Seed, SharedKey, array::Array, kem::{Decapsulate, DecapsulationKey, EncapsulationKey}
+    ArraySize, B32, Ciphertext, FromSeed, KeyExport, MlKem1024, Seed, SharedKey,
+    array::Array,
+    kem::{Decapsulate, DecapsulationKey, EncapsulationKey},
 };
 use rand_crypto::{CryptoRng, Rng};
 
@@ -140,7 +140,6 @@ fn kem_tut() {
     println!("{}", hex::encode(&shared));
     println!("len: {}", shared.len());
 }
-
 
 #[test]
 fn dsa_tut() {

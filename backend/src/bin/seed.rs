@@ -59,12 +59,7 @@ async fn main() {
 
     // user_profiles
     let profiles: Vec<(&str, &str, &str, Option<&str>)> = vec![
-        (
-            "Primary",
-            "Primary",
-            "Primary",
-            Some("https://www.youtube.com/watch?v=iR2TEgs8qnA"),
-        ),
+        ("Primary", "Primary", "Primary", None),
         ("Secondary", "Secondary", "Secondary", None),
         ("Tertiary", "Tertiary", "Tertiary", None),
     ];

@@ -1,9 +1,9 @@
 //! Authentication handlers for user registration, login, and account management
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -12,21 +12,29 @@ use std::sync::Arc;
 use time::Duration;
 use validator::Validate;
 
-use crate::config::Settings;
+use crate::middleware::security_audit::generate_fingerprint;
+use crate::utils::ClientIp;
 use crate::utils::crypto::{hash_password, verify_password};
 use crate::utils::password::validate_password_strength;
+use crate::{config::Settings, handlers::email_html::reset_email::build_reset_email};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use hmac::{Hmac, Mac};
 use magnolia_common::errors::AppError;
 use magnolia_common::models::{
     EmailVerification, PasswordReset, RegisterApplication, Session, UserAccount,
 };
 use magnolia_common::repositories::{
-    InviteRepository, MediaRepository, RegisterApplicationRepository, SiteConfigRepository,
-    UserRepository,
+    EmailSettingsRepository, EventRepository, InviteRepository, MediaRepository,
+    RegisterApplicationRepository, SiteConfigRepository, ThemeRepository, UserRepository,
 };
+use rand::RngCore;
+use sha2::Sha256;
+
 use magnolia_common::schemas::{
     ApplicationResponse, AuthConfigResponse, AuthResponse, ChangePasswordRequest,
-    E2EKeyBlobResponse, LoginRequest, MessageResponse, ProfileResponse, RegisterRequest,
-    RequestPasswordResetRequest, ResendVerificationRequest, ResetPasswordRequest,
+    E2EKeyBlobResponse, LoginRequest, MessageResponse, PasswordResetKeyResponse,
+    PasswordResetKeyStatus, ProfileResponse, RegisterRequest, RequestPasswordResetRequest,
+    ResendVerificationRequest, ResetPasswordRequest, ResetPasswordWithKeyRequest, SessionResponse,
     SetE2EKeyBlobRequest, SubmitApplicationRequest, UpdateProfileRequest, UpdatePublicKeyRequest,
     UserListItem, UserListQuery, UserListResponse, UserResponse, ValidatePasswordResetRequest,
     VerifyEmailRequest,
@@ -40,6 +48,14 @@ fn avatar_url(media_id: &Option<String>) -> Option<String> {
     media_id
         .as_ref()
         .map(|id| format!("/api/media/{}/thumbnail", id))
+}
+
+/// Minimal HTML escaper for email bodies.
+fn he(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Register a new user account
@@ -58,7 +74,7 @@ pub async fn register(
         AppError::Internal("Failed to fetch site configuration".to_string())
     })?;
 
-    // Validate the invite token (if provided) — a valid token bypasses mode restrictions
+    // Validate the invite token (if provided), a valid token bypasses mode restrictions
     let invite_opt = if let Some(ref token_str) = payload.invite_token {
         let token = token_str.trim().to_string();
         if token.is_empty() {
@@ -96,7 +112,7 @@ pub async fn register(
         None
     };
 
-    // Apply registration mode restrictions — a valid invite grants access in any mode
+    // Apply registration mode restrictions, a valid invite grants access in any mode
     match config.registration_mode.as_str() {
         "application" if invite_opt.is_none() => {
             return Err(AppError::Forbidden);
@@ -137,19 +153,13 @@ pub async fn register(
     );
     user_repo.create_user(&user).await?;
 
-    // Mark invite as used (any mode — if a token was validated above)
+    // Mark invite as used (any mode, if a token was validated above)
     if let Some(ref invite) = invite_opt {
         let invite_repo = InviteRepository::new(pool.clone());
         let now = chrono::Utc::now().to_rfc3339();
         let _ = invite_repo
             .mark_used(&invite.token, &user.user_id, &now)
             .await;
-    }
-
-    // Only create email verification token if user provided an email.
-    if user.email.is_some() {
-        let verification = EmailVerification::new(user.user_id.clone());
-        user_repo.create_verification_token(&verification).await?;
     }
 
     tracing::info!(
@@ -177,18 +187,25 @@ pub async fn register(
     ))
 }
 
-/// Get public auth configuration — tells the frontend how registration is handled.
+/// Get public auth configuration, tells the frontend how registration is handled.
 /// GET /api/auth/config
 pub async fn get_auth_config(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
 ) -> Result<Json<AuthConfigResponse>, AppError> {
-    let repo = SiteConfigRepository::new(pool);
-    let config = repo.get().await.map_err(|e| {
+    let config_repo = SiteConfigRepository::new(pool.clone());
+    let config = config_repo.get().await.map_err(|e| {
         tracing::error!("Failed to fetch site config: {:?}", e);
         AppError::Internal("Failed to fetch site configuration".to_string())
     })?;
+    let smtp_ok = EmailSettingsRepository::new(pool)
+        .get()
+        .await
+        .map(|es| crate::utils::email::smtp_is_configured_db(&es))
+        .unwrap_or(false);
     Ok(Json(AuthConfigResponse {
         registration_mode: config.registration_mode,
+        password_reset_email_available: config.password_reset_email_enabled != 0 && smtp_ok,
+        password_reset_signing_key_available: config.password_reset_signing_key_enabled != 0,
     }))
 }
 
@@ -199,6 +216,11 @@ pub async fn submit_application(
     Json(payload): Json<SubmitApplicationRequest>,
 ) -> Result<(StatusCode, Json<ApplicationResponse>), AppError> {
     payload.validate().map_err(AppError::from)?;
+    if payload.password.is_none() && payload.email.is_none() {
+        return Err(AppError::BadRequest(
+            "Either Password or Email are mandatory".to_string(),
+        ));
+    }
 
     let config_repo = SiteConfigRepository::new(pool.clone());
     let config = config_repo.get().await.map_err(|e| {
@@ -213,23 +235,46 @@ pub async fn submit_application(
     }
 
     let user_repo = UserRepository::new(pool.clone());
-    if user_repo.find_by_email(&payload.email).await?.is_some() {
-        return Err(AppError::Conflict("Email already registered".to_string()));
+
+    // Username must be unique among existing accounts
+    if user_repo
+        .find_by_username(&payload.username)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::Conflict("Username already taken".to_string()));
+    }
+
+    // Optionally check email uniqueness if one was provided
+    if let Some(ref email) = payload.email {
+        if user_repo.find_by_email(email).await?.is_some() {
+            return Err(AppError::Conflict("Email already registered".to_string()));
+        }
     }
 
     let app_repo = RegisterApplicationRepository::new(pool.clone());
+
+    // Prevent duplicate pending applications for the same username
     if app_repo
-        .find_pending_by_email(&payload.email)
+        .find_pending_by_username(&payload.username)
         .await?
         .is_some()
     {
         return Err(AppError::Conflict(
-            "A pending application for this email already exists".to_string(),
+            "A pending application for this username already exists".to_string(),
         ));
     }
 
+    let password_hash = if let Some(password) = payload.password {
+        hash_password(&password).ok()
+    } else {
+        None
+    };
+
     let application = RegisterApplication::new(
+        payload.username,
         payload.email,
+        password_hash,
         payload.display_name,
         payload.message,
         config.application_timeout_hours as i64,
@@ -247,6 +292,7 @@ pub async fn submit_application(
         StatusCode::CREATED,
         Json(ApplicationResponse {
             application_id: application.application_id,
+            username: application.username,
             email: application.email,
             display_name: application.display_name,
             message: application.message,
@@ -260,110 +306,19 @@ pub async fn submit_application(
     ))
 }
 
-/// Verify email address with token
-/// POST /api/auth/verify-email
-pub async fn verify_email(
-    State((pool, _settings)): State<AppState>,
-    Json(payload): Json<VerifyEmailRequest>,
-) -> Result<Json<MessageResponse>, AppError> {
-    let user_repo = UserRepository::new(pool);
-
-    // Find token
-    let verification = user_repo
-        .find_verification_token(&payload.token)
-        .await?
-        .ok_or_else(|| AppError::BadRequest("Invalid verification token".to_string()))?;
-
-    // Check if already used
-    if verification.used != 0 {
-        return Err(AppError::BadRequest(
-            "Token has already been used".to_string(),
-        ));
-    }
-
-    // Check expiration
-    if verification.is_expired() {
-        return Err(AppError::BadRequest(
-            "Verification token has expired".to_string(),
-        ));
-    }
-
-    // Mark user as verified
-    user_repo.mark_verified(&verification.user_id).await?;
-
-    // Mark token as used
-    user_repo.mark_token_used(&payload.token).await?;
-
-    tracing::info!(
-    target: "security",
-    event_category = "auth",
-    event_action = "email_verified",
-    event_outcome = "success",
-    user_id = %verification.user_id,
-    "Email verified successfully"
-    );
-
-    Ok(Json(MessageResponse {
-        message: "Email verified successfully".to_string(),
-    }))
-}
-
-/// Resend email verification
-/// POST /api/auth/resend-verification
-pub async fn resend_verification(
-    State((pool, _settings)): State<AppState>,
-    Json(payload): Json<ResendVerificationRequest>,
-) -> Result<Json<MessageResponse>, AppError> {
-    // Validate request
-    payload.validate().map_err(AppError::from)?;
-
-    let user_repo = UserRepository::new(pool);
-
-    // Find user by email
-    let user = user_repo
-        .find_by_email(&payload.email)
-        .await?
-        .ok_or_else(|| {
-            // Generic message to prevent email enumeration
-            AppError::BadRequest(
-                "If this email exists, a verification email has been sent".to_string(),
-            )
-        })?;
-
-    // Check if already verified
-    if user.verified != 0 {
-        return Ok(Json(MessageResponse {
-            message: "If this email exists, a verification email has been sent".to_string(),
-        }));
-    }
-
-    // Create new verification token
-    let verification = EmailVerification::new(user.user_id.clone());
-    user_repo.create_verification_token(&verification).await?;
-
-    // TODO: Send verification email
-    tracing::info!(
-    target: "auth",
-    user_id = %user.user_id,
-    "Resent email verification token"
-    );
-
-    Ok(Json(MessageResponse {
-        message: "If this email exists, a verification email has been sent".to_string(),
-    }))
-}
-
 /// User login
 /// POST /api/auth/login
 pub async fn login(
     State((pool, settings)): State<AppState>,
     jar: CookieJar,
+    ClientIp(client_ip): ClientIp,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), AppError> {
     // Validate request
     payload.validate().map_err(AppError::from)?;
 
-    let user_repo = UserRepository::new(pool);
+    let user_repo = UserRepository::new(pool.clone());
 
     // Find user by email or username (whichever identifier was provided).
     let user = user_repo
@@ -398,15 +353,76 @@ pub async fn login(
         return Err(AppError::Forbidden);
     }
 
-    // Create session
-    let session = Session::new(user.user_id.clone(), settings.session_duration_days);
+    // Collect device context for this session
+    let ip_address = client_ip;
+
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let peer_ip = ip_address.as_ref().and_then(|s| s.parse().ok());
+    let fingerprint = generate_fingerprint(&headers, peer_ip);
+
+    // Fire a security event if this fingerprint has never been seen for this user.
+    // Uses a persistent known_devices table so recognition survives logouts.
+    let fingerprint_known = user_repo
+        .fingerprint_known_for_user(&user.user_id, &fingerprint)
+        .await
+        .unwrap_or(true); // on error, assume known to avoid spam
+
+    if !fingerprint_known {
+        let ip_display = ip_address.as_deref().unwrap_or("unknown");
+        let ua_display = user_agent.as_deref().unwrap_or("unknown client");
+        let body = format!(
+            "A new device or browser signed in to your account.\n\nIP: {}\nClient: {}\n\nIf this was not you, revoke this session immediately from Account Security \u{2192} Active Sessions.",
+            ip_display, ua_display
+        );
+        let meta = serde_json::json!({
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "fingerprint": fingerprint,
+        });
+        let event_repo = EventRepository::new(pool.clone());
+        let _ = event_repo
+            .create(
+                &user.user_id,
+                "security",
+                "new_device_login",
+                "warning",
+                "New sign-in from an unrecognized device",
+                &body,
+                Some(&meta.to_string()),
+            )
+            .await;
+    }
+
+    // Record the device as known (persists across logouts)
+    let _ = user_repo
+        .upsert_known_device(
+            &user.user_id,
+            &fingerprint,
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await;
+
+    // Create session with device context
+    let mut session = Session::new(user.user_id.clone(), settings.session_duration_days);
+    session.ip_address = ip_address;
+    session.user_agent = user_agent;
+    session.fingerprint = Some(fingerprint);
     user_repo.create_session(&session).await?;
 
     // Create session cookie
+    // Only set Secure flag when actually served over HTTPS.
+    // A plain-HTTP deployment (e.g. behind a reverse proxy that handles TLS
+    // at the edge) must not set Secure or the browser silently drops the cookie.
+    let https = settings.base_url.starts_with("https://");
     let cookie = Cookie::build((SESSION_COOKIE_NAME, session.session_id.clone()))
         .path("/")
         .http_only(true)
-        .secure(settings.env != "development")
+        .secure(https)
         .same_site(SameSite::Strict)
         .max_age(Duration::days(settings.session_duration_days))
         .build();
@@ -429,7 +445,7 @@ pub async fn login(
         Json(AuthResponse {
             user: UserResponse {
                 user_id: user.user_id,
-                // Return email on login regardless of visibility — it's the user's own data.
+                // Return email on login regardless of visibility, it's the user's own data.
                 email: user.email,
                 username: user.username,
                 display_name: user.display_name,
@@ -477,42 +493,88 @@ pub async fn logout(
     Ok((jar, StatusCode::NO_CONTENT))
 }
 
-/// Request password reset
+/// Request password reset via email token
 /// POST /api/auth/request-password-reset
 pub async fn request_password_reset(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     Json(payload): Json<RequestPasswordResetRequest>,
 ) -> Result<Json<MessageResponse>, AppError> {
-    // Validate request
     payload.validate().map_err(AppError::from)?;
+
+    // Check that email reset is enabled
+    let config_repo = SiteConfigRepository::new(pool.clone());
+    let config = config_repo.get().await.map_err(|e| {
+        tracing::error!("Failed to fetch site config: {:?}", e);
+        AppError::Internal("Failed to fetch site configuration".to_string())
+    })?;
+    if config.password_reset_email_enabled == 0 {
+        return Err(AppError::BadRequest(
+            "Email password reset is not enabled on this server".to_string(),
+        ));
+    }
+
+    let email_settings = EmailSettingsRepository::new(pool.clone())
+        .get()
+        .await
+        .map_err(|_| AppError::Internal("Failed to fetch email settings".to_string()))?;
+
+    if !crate::utils::email::smtp_is_configured_db(&email_settings) {
+        return Err(AppError::BadRequest(
+            "Email is not configured on this server".to_string(),
+        ));
+    }
+
+    // Fetch branding for the email template
+    let theme = ThemeRepository::new(pool.clone())
+        .get_active()
+        .await
+        .ok()
+        .flatten();
+    let site_title = theme.as_ref().map_or("Magnolia", |t| &t.site_title);
+    let accent = theme.as_ref().map_or("#2563eb", |t| &t.color_accent);
 
     let user_repo = UserRepository::new(pool);
 
-    // Find user by email (but don't reveal if found)
+    // Find user by email (don't reveal whether the account exists)
     if let Some(user) = user_repo.find_by_email(&payload.email).await? {
-        // Invalidate any existing reset tokens
         user_repo
             .invalidate_user_password_resets(&user.user_id)
             .await?;
 
-        // Create new reset token
         let reset = PasswordReset::new(user.user_id.clone());
         user_repo.create_password_reset_token(&reset).await?;
 
-        // TODO: Send password reset email
-        tracing::info!(
-        target: "auth",
-        user_id = %user.user_id,
-        "Password reset token created (send via email in production)"
+        let reset_link = format!(
+            "{}/#reset-password/{}",
+            settings.base_url.trim_end_matches('/'),
+            reset.token
         );
+        let subject = format!("{} – Password reset request", site_title);
+
+        let (text_body, html_body) = build_reset_email(site_title, accent, reset_link);
+
+        if let Err(e) = crate::utils::email::send_email_db_html(
+            &email_settings,
+            &payload.email,
+            &subject,
+            &text_body,
+            &html_body,
+        )
+        .await
+        {
+            tracing::error!(
+                "Failed to send password reset email to {}: {e}",
+                payload.email
+            );
+        }
 
         tracing::info!(
-        target: "security",
-        event_category = "auth",
-        event_action = "password_reset_requested",
-        event_outcome = "success",
-        user_id = %user.user_id,
-        "Password reset requested"
+            target: "security",
+            event_category = "auth",
+            event_action = "password_reset_requested",
+            event_outcome = "success",
+            user_id = %user.user_id,
+            "Password reset email sent"
         );
     }
 
@@ -749,7 +811,7 @@ pub async fn update_profile(
 
     Ok(Json(ProfileResponse {
         user_id: user.user_id,
-        email: user.email, // own profile update — always return own email
+        email: user.email, // own profile update, always return own email
         email_visible: user.email_visible != 0,
         display_name: user.display_name,
         username: user.username,
@@ -809,7 +871,7 @@ pub async fn get_e2e_key_blob(
 }
 
 /// Persist the authenticated user's passphrase-encrypted E2E key blob.
-/// The server stores it opaquely — it cannot decrypt it.
+/// The server stores it opaquely, it cannot decrypt it.
 /// PUT /api/auth/me/e2e-key
 pub async fn set_e2e_key_blob(
     State((pool, _settings)): State<AppState>,
@@ -822,6 +884,172 @@ pub async fn set_e2e_key_blob(
         .await?;
     Ok(Json(MessageResponse {
         message: "E2E key blob stored".to_string(),
+    }))
+}
+
+//  Password-reset signing key
+
+/// GET /api/auth/me/password-reset-key/status
+/// Returns whether the calling user has a signing key stored.
+pub async fn get_password_reset_key_status(
+    State((pool, _settings)): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::middleware::auth::AuthMiddleware>,
+) -> Result<Json<PasswordResetKeyStatus>, AppError> {
+    let repo = UserRepository::new(pool);
+    let key = repo
+        .get_password_reset_signing_key(&auth.user.user_id)
+        .await?;
+    Ok(Json(PasswordResetKeyStatus {
+        has_key: key.is_some(),
+    }))
+}
+
+/// POST /api/auth/me/password-reset-key/generate
+/// Generates (or re-generates) the user's HMAC signing key and returns it as a
+/// downloadable payload. The raw key is never stored anywhere else; the server
+/// retains it to verify future reset requests.
+pub async fn generate_password_reset_key(
+    State((pool, settings)): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::middleware::auth::AuthMiddleware>,
+) -> Result<Json<PasswordResetKeyResponse>, AppError> {
+    // Check that signing-key reset is enabled
+    let config_repo = SiteConfigRepository::new(pool.clone());
+    let config = config_repo.get().await.map_err(|e| {
+        tracing::error!("Failed to fetch site config: {:?}", e);
+        AppError::Internal("Failed to fetch site configuration".to_string())
+    })?;
+    if config.password_reset_signing_key_enabled == 0 {
+        return Err(AppError::BadRequest(
+            "Signing-key password reset is not enabled on this server".to_string(),
+        ));
+    }
+
+    // Generate 32 random bytes
+    let mut key_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut key_bytes);
+    let key_b64 = B64.encode(key_bytes);
+
+    let repo = UserRepository::new(pool);
+    repo.set_password_reset_signing_key(&auth.user.user_id, &key_b64)
+        .await?;
+
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    tracing::info!(
+        target: "security",
+        event_category = "auth",
+        event_action = "reset_signing_key_generated",
+        user_id = %auth.user.user_id,
+        "Password reset signing key generated"
+    );
+
+    Ok(Json(PasswordResetKeyResponse {
+        user_id: auth.user.user_id.clone(),
+        username: auth.user.username.clone(),
+        key: key_b64,
+        generated_at,
+    }))
+}
+
+/// DELETE /api/auth/me/password-reset-key
+/// Revokes the user's signing key so it can no longer be used for password reset.
+pub async fn revoke_password_reset_key(
+    State((pool, _settings)): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::middleware::auth::AuthMiddleware>,
+) -> Result<Json<MessageResponse>, AppError> {
+    let repo = UserRepository::new(pool);
+    repo.clear_password_reset_signing_key(&auth.user.user_id)
+        .await?;
+    tracing::info!(
+        target: "security",
+        event_category = "auth",
+        event_action = "reset_signing_key_revoked",
+        user_id = %auth.user.user_id,
+        "Password reset signing key revoked"
+    );
+    Ok(Json(MessageResponse {
+        message: "Recovery key revoked".to_string(),
+    }))
+}
+
+/// POST /api/auth/reset-password-with-key
+/// Public endpoint. Resets the password if the HMAC signature over
+/// "magnolia-reset|{timestamp}|{new_password}" verifies against the stored key.
+pub async fn reset_password_with_key(
+    State((pool, _settings)): State<AppState>,
+    Json(payload): Json<ResetPasswordWithKeyRequest>,
+) -> Result<Json<MessageResponse>, AppError> {
+    payload.validate().map_err(AppError::from)?;
+
+    // Check that signing-key reset is enabled
+    let config_repo = SiteConfigRepository::new(pool.clone());
+    let config = config_repo.get().await.map_err(|e| {
+        tracing::error!("Failed to fetch site config: {:?}", e);
+        AppError::Internal("Failed to fetch site configuration".to_string())
+    })?;
+    if config.password_reset_signing_key_enabled == 0 {
+        return Err(AppError::BadRequest(
+            "Signing-key password reset is not enabled on this server".to_string(),
+        ));
+    }
+
+    // Reject stale or future timestamps (±5 minutes)
+    let now_secs = chrono::Utc::now().timestamp();
+    if (now_secs - payload.timestamp).abs() > 300 {
+        return Err(AppError::BadRequest(
+            "Request timestamp is out of range".to_string(),
+        ));
+    }
+
+    validate_password_strength(&payload.new_password)?;
+
+    let user_repo = UserRepository::new(pool);
+
+    // Fetch the stored signing key for this user
+    let (user_id, stored_key_opt) = user_repo
+        .find_by_id_with_signing_key(&payload.user_id)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("Invalid user".to_string()))?;
+
+    let stored_key_b64 = stored_key_opt.ok_or_else(|| {
+        AppError::BadRequest("No recovery key on file for this account".to_string())
+    })?;
+
+    // Verify HMAC-SHA256( key, "magnolia-reset|{timestamp}|{new_password}" )
+    let key_bytes = B64
+        .decode(&stored_key_b64)
+        .map_err(|_| AppError::Internal("Stored key is malformed".to_string()))?;
+    let msg = format!(
+        "magnolia-reset|{}|{}",
+        payload.timestamp, payload.new_password
+    );
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key_bytes)
+        .map_err(|_| AppError::Internal("HMAC key error".to_string()))?;
+    mac.update(msg.as_bytes());
+    let sig_bytes = B64
+        .decode(&payload.signature)
+        .map_err(|_| AppError::BadRequest("Invalid signature encoding".to_string()))?;
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| AppError::BadRequest("Invalid recovery key or signature".to_string()))?;
+
+    // All checks passed - update the password
+    let password_hash = hash_password(&payload.new_password)?;
+    user_repo.update_password(&user_id, &password_hash).await?;
+    // Invalidate all sessions (force re-login)
+    user_repo.delete_user_sessions(&user_id).await?;
+    // Optionally revoke the key so it can only be used once - user must regenerate
+    user_repo.clear_password_reset_signing_key(&user_id).await?;
+
+    tracing::info!(
+        target: "security",
+        event_category = "auth",
+        event_action = "password_reset_with_key_completed",
+        event_outcome = "success",
+        user_id = %user_id,
+        "Password reset via signing key completed"
+    );
+
+    Ok(Json(MessageResponse {
+        message: "Password reset successfully. Please log in with your new password.".to_string(),
     }))
 }
 
@@ -841,4 +1069,66 @@ pub async fn update_public_key(
     Ok(Json(MessageResponse {
         message: "Public key updated".to_string(),
     }))
+}
+
+/// GET /api/auth/sessions
+/// List all sessions for the authenticated user.
+pub async fn list_sessions(
+    State((pool, _settings)): State<AppState>,
+    jar: CookieJar,
+    Extension(auth): Extension<crate::middleware::auth::AuthMiddleware>,
+) -> Result<Json<Vec<SessionResponse>>, AppError> {
+    let current_session_id = jar.get(SESSION_COOKIE_NAME).map(|c| c.value().to_string());
+
+    let repo = UserRepository::new(pool);
+    let sessions = repo.list_sessions_for_user(&auth.user.user_id).await?;
+
+    let responses = sessions
+        .into_iter()
+        .map(|s| {
+            let is_current = current_session_id
+                .as_deref()
+                .map(|id| id == s.session_id)
+                .unwrap_or(false);
+            SessionResponse {
+                session_id: s.session_id,
+                created_at: s.created_at,
+                expires_at: s.expires_at,
+                ip_address: s.ip_address,
+                user_agent: s.user_agent,
+                is_current,
+            }
+        })
+        .collect();
+
+    Ok(Json(responses))
+}
+
+/// DELETE /api/auth/sessions/:id
+/// Revoke a specific session. Users can only revoke their own sessions.
+/// Also evicts the session's fingerprint from known_devices so that if the
+/// same device logs in again it will trigger a new-device event.
+pub async fn revoke_session(
+    State((pool, _settings)): State<AppState>,
+    Extension(auth): Extension<crate::middleware::auth::AuthMiddleware>,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let repo = UserRepository::new(pool);
+
+    // Fetch session first to get its fingerprint before deleting
+    let session = repo
+        .find_session(&session_id)
+        .await?
+        .filter(|s| s.user_id == auth.user.user_id)
+        .ok_or_else(|| AppError::NotFound("Session not found".to_string()))?;
+
+    repo.delete_session_for_user(&session_id, &auth.user.user_id)
+        .await?;
+
+    // Evict fingerprint so next login from this device triggers a new-device event
+    if let Some(fp) = session.fingerprint {
+        let _ = repo.remove_known_device(&auth.user.user_id, &fp).await;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -16,7 +16,7 @@ pub struct CreatePostRequest {
 }
 
 /// Individual content item in a post creation request
-#[derive(Debug, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CreatePostContentRequest {
     /// Content type: text, image, video, file
     #[validate(length(min = 1, max = 10))]

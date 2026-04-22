@@ -16,10 +16,11 @@ use crate::handlers::{
     admin as admin_handlers, auth as auth_handlers, calling as calling_handlers,
     comment as comment_handlers, events as event_handlers, global_call as global_call_handlers,
     link_preview as link_preview_handlers, media as media_handlers,
-    messaging as messaging_handlers, post as post_handlers, setup as setup_handlers,
-    tag as tag_handlers, theme as theme_handlers, ws as ws_handlers,
+    messaging as messaging_handlers, post as post_handlers, proxy_user as proxy_handlers,
+    setup as setup_handlers, tag as tag_handlers, theme as theme_handlers, ws as ws_handlers,
 };
-use crate::middleware::auth::{require_admin, require_auth};
+use crate::middleware::auth::{require_admin, require_auth, try_auth};
+use crate::middleware::proxy_auth::require_proxy_auth;
 use crate::middleware::rate_limit::{RateLimiter, create_auth_rate_limit_middleware};
 use crate::middleware::security_audit::{AuditService, audit_middleware};
 use crate::{config::Settings, middleware::security_headers::add_security_headers};
@@ -50,14 +51,14 @@ pub fn create_router(
     let ws_limiter = RateLimiter::new(10, 60, trusted_proxy.clone());
     // Public content: generous limit to allow normal browsing while blocking scrapers
     let public_limiter = RateLimiter::new(120, 60, trusted_proxy.clone());
-    // Link preview makes outbound HTTP requests — tighter limit per authenticated user
+    // Link preview makes outbound HTTP requests, tighter limit per authenticated user
     let link_preview_limiter = RateLimiter::new(20, 60, trusted_proxy.clone());
     // Change-password: sensitive operation, same tight limit as login
     let change_password_limiter = RateLimiter::new(5, 60, trusted_proxy.clone());
     // S2S inbound: generous per-peer limit since a peer may send many messages,
     // but still bounds flood attacks from a single origin IP
     let s2s_limiter = RateLimiter::new(60, 60, trusted_proxy.clone());
-    // S2S media: tighter limit — file transfers are expensive
+    // S2S media: tighter limit, file transfers are expensive
     let s2s_media_limiter = RateLimiter::new(30, 60, trusted_proxy);
 
     // Auth routes with strict rate limiting and optional audit logging
@@ -65,11 +66,6 @@ pub fn create_router(
         .route("/api/auth/register", post(handlers::register))
         .route("/api/auth/apply", post(auth_handlers::submit_application))
         .route("/api/auth/config", get(auth_handlers::get_auth_config))
-        .route("/api/auth/verify-email", post(handlers::verify_email))
-        .route(
-            "/api/auth/resend-verification",
-            post(handlers::resend_verification),
-        )
         .route("/api/auth/login", post(handlers::login))
         // Password reset endpoints
         .route(
@@ -81,6 +77,10 @@ pub fn create_router(
             post(handlers::validate_password_reset),
         )
         .route("/api/auth/reset-password", post(handlers::reset_password))
+        .route(
+            "/api/auth/reset-password-with-key",
+            post(auth_handlers::reset_password_with_key),
+        )
         .route("/api/auth/logout", post(auth_handlers::logout))
         // Auth payloads are tiny (email + password). A tight body limit prevents
         // large-body DoS before the rate limiter even runs.
@@ -131,7 +131,10 @@ pub fn create_router(
         .route("/api/posts/{post_id}", get(post_handlers::get_post))
         .layer(middleware::from_fn(create_auth_rate_limit_middleware(
             public_limiter.clone(),
-        )));
+        )))
+        // Silently populate auth extensions when a valid session is present,
+        // so OptionalAuth can see the user (e.g. to allow include_drafts for own posts).
+        .layer(middleware::from_fn_with_state(state.clone(), try_auth));
 
     // Protected post routes (authentication required)
     let protected_post_routes = Router::new()
@@ -254,7 +257,7 @@ pub fn create_router(
         .layer(Extension(registry.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Link preview (authenticated — prevents open-proxy abuse; rate-limited — makes outbound HTTP)
+    // Link preview (authenticated — prevents open-proxy abuse; rate-limited, makes outbound HTTP)
     let link_preview_routes = Router::new()
         .route(
             "/api/link-preview",
@@ -282,6 +285,23 @@ pub fn create_router(
             "/api/auth/me/e2e-key",
             get(auth_handlers::get_e2e_key_blob).put(auth_handlers::set_e2e_key_blob),
         )
+        .route(
+            "/api/auth/me/password-reset-key/status",
+            get(auth_handlers::get_password_reset_key_status),
+        )
+        .route(
+            "/api/auth/me/password-reset-key/generate",
+            post(auth_handlers::generate_password_reset_key),
+        )
+        .route(
+            "/api/auth/me/password-reset-key",
+            delete(auth_handlers::revoke_password_reset_key),
+        )
+        .route("/api/auth/sessions", get(auth_handlers::list_sessions))
+        .route(
+            "/api/auth/sessions/{id}",
+            delete(auth_handlers::revoke_session),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Change-password: auth required + tight rate limit (same as login)
@@ -294,6 +314,103 @@ pub fn create_router(
             change_password_limiter,
         )))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
+    // Proxy admin routes (admin required)
+    let proxy_admin_routes = Router::new()
+        .route(
+            "/api/admin/proxies",
+            get(proxy_handlers::admin_list_proxies).post(proxy_handlers::admin_create_proxy),
+        )
+        .route(
+            "/api/admin/proxies/{proxy_id}",
+            get(proxy_handlers::admin_get_proxy)
+                .patch(proxy_handlers::admin_update_proxy)
+                .delete(proxy_handlers::admin_delete_proxy),
+        )
+        .route(
+            "/api/admin/proxies/{proxy_id}/password",
+            put(proxy_handlers::admin_set_proxy_password),
+        )
+        .route(
+            "/api/admin/proxies/{proxy_id}/e2e-key",
+            put(proxy_handlers::admin_set_proxy_e2e_key),
+        )
+        .route(
+            "/api/admin/proxies/{proxy_id}/hmac-key",
+            put(proxy_handlers::admin_set_proxy_hmac_key),
+        )
+        .route(
+            "/api/admin/proxies/{proxy_id}/rate-limit",
+            get(proxy_handlers::admin_get_proxy_rate_limit)
+                .put(proxy_handlers::admin_set_proxy_rate_limit),
+        )
+        .layer(middleware::from_fn_with_state(state.clone(), require_admin));
+
+    // Proxy user routes (regular user managing their own proxy)
+    let proxy_user_routes = Router::new()
+        .route(
+            "/api/proxy",
+            get(proxy_handlers::get_my_proxy)
+                .patch(proxy_handlers::update_my_proxy)
+                .post(proxy_handlers::user_create_proxy),
+        )
+        .route(
+            "/api/proxy/password",
+            put(proxy_handlers::set_my_proxy_password),
+        )
+        .route(
+            "/api/proxy/e2e-key",
+            put(proxy_handlers::set_my_proxy_e2e_key),
+        )
+        .route(
+            "/api/proxy/hmac-key",
+            put(proxy_handlers::set_my_proxy_hmac_key),
+        )
+        .route(
+            "/api/proxy/list-public",
+            get(proxy_handlers::list_public_proxies),
+        )
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
+    // Proxy session auth routes (no user auth needed, uses proxy session cookie)
+    let proxy_session_routes = Router::new()
+        .route("/api/proxy/me", get(proxy_handlers::proxy_me))
+        .route("/api/proxy/logout", post(proxy_handlers::proxy_logout))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_proxy_auth,
+        ));
+
+    // Shared proxy rate limiter (in-memory, per-proxy upload tracking)
+    let proxy_rate_limiter = crate::proxy_rate::ProxyRateLimiter::new();
+
+    // HMAC one-shot proxy routes (public auth via HMAC signature)
+    let proxy_hmac_routes = Router::new()
+        .route(
+            "/api/proxy/hmac/send-message",
+            post(proxy_handlers::hmac_send_message),
+        )
+        .route(
+            "/api/proxy/hmac/create-post",
+            post(proxy_handlers::hmac_create_post),
+        )
+        .route(
+            "/api/proxy/hmac/get-or-create-conversation",
+            post(proxy_handlers::hmac_get_or_create_conversation),
+        )
+        .route(
+            "/api/proxy/hmac/upload-media",
+            post(proxy_handlers::hmac_upload_media),
+        )
+        .layer(Extension(proxy_rate_limiter))
+        .layer(Extension(registry.clone()));
+
+    // Proxy login (public, rate-limited with auth limiter)
+    let proxy_login_route = Router::new()
+        .route("/api/proxy/login", post(proxy_handlers::proxy_login))
+        .layer(middleware::from_fn(create_auth_rate_limit_middleware(
+            RateLimiter::new(5, 60, settings.trusted_proxy.clone()),
+        )));
 
     // Admin routes (authentication + admin flag required)
     let admin_routes = Router::new()
@@ -372,6 +489,10 @@ pub fn create_router(
             "/api/admin/stun-servers/{id}",
             patch(admin_handlers::admin_update_stun_server)
                 .delete(admin_handlers::admin_delete_stun_server),
+        )
+        .route(
+            "/api/admin/embedded-turn",
+            get(admin_handlers::admin_get_embedded_turn),
         )
         .layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -474,6 +595,7 @@ pub fn create_router(
             "/api/conversations/{id}/background",
             delete(messaging_handlers::delete_background),
         )
+        .layer(Extension(registry.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // WebSocket route — rate limited + auth-gated.
@@ -528,9 +650,12 @@ pub fn create_router(
         .layer(Extension(registry.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // CORS layer - proper configuration
-
-    let origins = [env::var("WEB_ORIGIN").unwrap().parse().unwrap()];
+    let web_origin = env::var("WEB_ORIGIN")
+        .or_else(|_| env::var("BASE_URL"))
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let origins = [web_origin
+        .parse()
+        .expect("WEB_ORIGIN is not a valid HTTP origin")];
     let cors = CorsLayer::new()
         .allow_credentials(true)
         .allow_methods([
@@ -577,6 +702,12 @@ pub fn create_router(
         .merge(event_routes)
         // Link preview
         .merge(link_preview_routes)
+        // Proxy user system
+        .merge(proxy_admin_routes)
+        .merge(proxy_user_routes)
+        .merge(proxy_session_routes)
+        .merge(proxy_hmac_routes)
+        .merge(proxy_login_route)
         // Federation
         .merge(fed_routes)
         // Static files

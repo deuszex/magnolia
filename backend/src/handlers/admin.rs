@@ -1,4 +1,4 @@
-//! Admin handlers — site configuration, user management, and invite management
+//! Admin handlers, site configuration, user management, and invite management
 
 use axum::{
     Extension, Json,
@@ -9,26 +9,27 @@ use sqlx::AnyPool;
 use std::sync::Arc;
 use validator::Validate;
 
-use crate::config::Settings;
 use crate::middleware::auth::AuthMiddleware;
+use crate::turn;
 use crate::utils::crypto::hash_password;
 use crate::utils::email::{
     send_email, send_email_db, send_email_db_html, send_email_html, smtp_is_configured,
     smtp_is_configured_db,
 };
 use crate::utils::password::validate_password_strength;
+use crate::{config::Settings, handlers::email_html::invite_email::build_invite_email};
 use magnolia_common::errors::AppError;
+use magnolia_common::models::StunServer;
 use magnolia_common::models::{Invite, PasswordReset, RegisterApplication, UserAccount};
+use magnolia_common::repositories::StunServerRepository;
 use magnolia_common::repositories::{
     EmailSettingsRepository, InviteRepository, RegisterApplicationRepository, SiteConfigRepository,
     ThemeRepository, UserRepository,
 };
-use magnolia_common::models::StunServer;
-use magnolia_common::repositories::StunServerRepository;
 use magnolia_common::schemas::{
     AdminCreateUserRequest, AdminUpdateUserRequest, AdminUserListItem, AdminUserListQuery,
     AdminUserListResponse, ApplicationListQuery, ApplicationListResponse, ApplicationResponse,
-    ApproveApplicationResponse, CreateStunServerRequest, CreateInviteRequest,
+    ApproveApplicationResponse, CreateInviteRequest, CreateStunServerRequest,
     EmailSettingsResponse, InviteListQuery, InviteListResponse, InviteResponse, MessageResponse,
     SendEmailInvitesRequest, SendEmailInvitesResponse, SiteConfigResponse, StunServerResponse,
     UpdateEmailSettingsRequest, UpdateSiteConfigRequest, UpdateStunServerRequest,
@@ -40,167 +41,6 @@ fn avatar_url(media_id: &Option<String>) -> Option<String> {
     media_id
         .as_ref()
         .map(|id| format!("/api/media/{}/thumbnail", id))
-}
-
-/// Minimal HTML escaping for embedding user content in email templates.
-fn he(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// Build invite email subject, plain-text body, and HTML body.
-fn build_invite_email(
-    site_name: &str,
-    accent: &str,
-    invite_link: &str,
-    expires_hours: i64,
-    personal_message: Option<&str>,
-) -> (String, String, String) {
-    let subject = format!("You've been invited to join {}", site_name);
-
-    // Plain text
-    let msg_text = personal_message
-        .map(|m| format!("\nMessage from the team:\n{}\n", m))
-        .unwrap_or_default();
-
-    let text_body = format!(
-        "You have been invited to join {site_name}.{msg_text}\n\
- Click the link below to register:\n{invite_link}\n\n\
- This invite expires in {expires_hours} hours.\n\
- If you did not expect this email you can safely ignore it.",
-        site_name = site_name,
-        msg_text = msg_text,
-        invite_link = invite_link,
-        expires_hours = expires_hours,
-    );
-
-    // HTML
-    let msg_html = personal_message
- .map(|m| {
- let lines: String = m
- .lines()
- .map(|l| format!("{}<br>", he(l)))
- .collect::<Vec<_>>()
- .join("\n");
- format!(
- r#"<tr><td style="padding:0 32px 24px">
- <div style="background:#1e2330;border-left:3px solid {accent};border-radius:4px;padding:14px 16px">
- <p style="margin:0 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:{accent}">Message from the team</p>
- <p style="margin:0;color:#cbd5e1;font-size:14px;line-height:1.6">{lines}</p>
- </div>
-</td></tr>"#,
- accent = accent,
- lines = lines,
- )
- })
- .unwrap_or_default();
-
-    let site_name_h = he(site_name);
-    let link_h = he(invite_link);
-
-    let html_body = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
- <meta charset="UTF-8">
- <meta name="viewport" content="width=device-width,initial-scale=1.0">
- <title>You're invited to {site_name_h}</title>
-</head>
-<body style="margin:0;padding:0;background:#0d0f14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
- <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
- style="background:#0d0f14;padding:48px 16px">
- <tr><td align="center">
-
- <!-- Card -->
- <table role="presentation" cellpadding="0" cellspacing="0"
- style="background:#181b24;border-radius:12px;max-width:560px;width:100%;overflow:hidden">
-
- <!-- Header -->
- <tr>
- <td style="background:{accent};padding:22px 32px">
- <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:-0.02em">{site_name_h}</span>
- </td>
- </tr>
-
- <!-- Headline -->
- <tr>
- <td style="padding:36px 32px 8px">
- <h1 style="margin:0 0 12px;font-size:26px;font-weight:700;color:#f1f5f9;line-height:1.2">
- You&#8217;ve been invited!
- </h1>
- <p style="margin:0;color:#94a3b8;font-size:15px;line-height:1.6">
- You have been invited to join
- <strong style="color:#e2e8f0">{site_name_h}</strong>.
- Click the button below to create your account.
- </p>
- </td>
- </tr>
-
- <!-- Optional personal message -->
- {msg_html}
-
- <!-- CTA button -->
- <tr>
- <td style="padding:24px 32px 8px">
- <table role="presentation" cellpadding="0" cellspacing="0">
- <tr>
- <td style="background:{accent};border-radius:8px">
- <a href="{link_h}"
- style="display:inline-block;padding:13px 30px;color:#ffffff;
- text-decoration:none;font-weight:600;font-size:15px">
- Accept Invitation
- </a>
- </td>
- </tr>
- </table>
- </td>
- </tr>
-
- <!-- Fallback link -->
- <tr>
- <td style="padding:16px 32px 0">
- <p style="margin:0 0 4px;color:#64748b;font-size:12px">Or copy this link into your browser:</p>
- <p style="margin:0;word-break:break-all;font-size:12px;font-family:monospace;color:{accent}">
- <a href="{link_h}" style="color:{accent};text-decoration:none">{link_h}</a>
- </p>
- </td>
- </tr>
-
- <!-- Expiry notice -->
- <tr>
- <td style="padding:20px 32px 28px">
- <p style="margin:0;color:#475569;font-size:12px;
- padding-top:16px;border-top:1px solid #252935;line-height:1.5">
- This invitation expires in <strong>{expires_hours} hours</strong>.
- If you did not expect this email you can safely ignore it.
- </p>
- </td>
- </tr>
-
- <!-- Footer -->
- <tr>
- <td style="background:#11131a;padding:14px 32px;border-top:1px solid #252935">
- <p style="margin:0;color:#334155;font-size:11px">
- {site_name_h} &mdash; Sent via secure invitation
- </p>
- </td>
- </tr>
-
- </table>
- </td></tr>
- </table>
-</body>
-</html>"#,
-        site_name_h = site_name_h,
-        accent = accent,
-        link_h = link_h,
-        msg_html = msg_html,
-        expires_hours = expires_hours,
-    );
-
-    (subject, text_body, html_body)
 }
 
 // Site configuration
@@ -310,6 +150,11 @@ pub async fn update_site_config(
             payload.registration_mode.as_deref(),
             payload.application_timeout_hours,
             payload.enforce_invite_email.map(|b| b as i32),
+            payload.password_reset_email_enabled.map(|b| b as i32),
+            payload.password_reset_signing_key_enabled.map(|b| b as i32),
+            payload.proxy_user_system.map(|b| b as i32),
+            payload.proxy_rate_limit_pieces,
+            payload.proxy_rate_limit_bytes,
         )
         .await
         .map_err(|e| {
@@ -347,6 +192,11 @@ fn build_site_config_response(
         application_timeout_hours: config.application_timeout_hours,
         enforce_invite_email: config.enforce_invite_email == 1,
         smtp_configured: smtp_db_configured || smtp_is_configured(settings),
+        password_reset_email_enabled: config.password_reset_email_enabled == 1,
+        password_reset_signing_key_enabled: config.password_reset_signing_key_enabled == 1,
+        proxy_user_system: config.proxy_user_system == 1,
+        proxy_rate_limit_pieces: config.proxy_rate_limit_pieces,
+        proxy_rate_limit_bytes: config.proxy_rate_limit_bytes,
         updated_at: config.updated_at,
     }
 }
@@ -806,26 +656,22 @@ pub async fn admin_approve_application(
     }
 
     let user_repo = UserRepository::new(pool.clone());
-    if user_repo.find_by_email(&application.email).await?.is_some() {
-        return Err(AppError::Conflict(
-            "An account with this email already exists".to_string(),
-        ));
+
+    // Check email uniqueness if the application has one
+    if let Some(ref email) = application.email {
+        if user_repo.find_by_email(email).await?.is_some() {
+            return Err(AppError::Conflict(
+                "An account with this email already exists".to_string(),
+            ));
+        }
     }
 
-    // Derive a default username from the email local-part; make it unique if needed.
+    // Use the username from the application; make it unique if somehow taken since submission.
     let base_username = application
-        .email
-        .split('@')
-        .next()
+        .username
+        .as_deref()
         .unwrap_or("user")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<String>();
-    let base_username = if base_username.len() < 3 {
-        format!("user_{}", base_username)
-    } else {
-        base_username
-    };
+        .to_string();
     let username = if user_repo.find_by_username(&base_username).await?.is_none() {
         base_username
     } else {
@@ -836,9 +682,12 @@ pub async fn admin_approve_application(
         )
     };
 
-    // Create the user with a random unusable password (they'll set their own via reset link)
-    let dummy_hash = hash_password(&uuid::Uuid::new_v4().to_string())?;
-    let mut user = UserAccount::new(username, Some(application.email.clone()), dummy_hash);
+    let (password_hash, had_pass) = if let Some(ph) = application.password {
+        (ph, true)
+    } else {
+        (hash_password(&uuid::Uuid::new_v4().to_string())?, false)
+    };
+    let mut user = UserAccount::new(username, application.email.clone(), password_hash);
     if let Some(ref dn) = application.display_name {
         user.display_name = Some(dn.clone());
     }
@@ -846,70 +695,76 @@ pub async fn admin_approve_application(
 
     user_repo.create_user(&user).await?;
 
-    // Create a password reset token so the user can set their password
-    let reset = PasswordReset::new(user.user_id.clone());
-    user_repo.create_password_reset_token(&reset).await?;
-
-    let base_url = settings.base_url.trim_end_matches('/').to_string();
-    let setup_link = format!("{}/#reset-password/{}", base_url, reset.token);
-
     // Mark application as approved
     app_repo
         .update_status(&application_id, "approved", &auth.user.user_id)
         .await?;
 
     tracing::info!(
-        "Admin {} approved application {} — created user {}",
+        "Admin {} approved application {}, created user {}",
         auth.user.user_id,
         application_id,
         user.user_id
     );
 
-    // Try to send setup email — DB settings take priority over env vars
-    let email_repo = EmailSettingsRepository::new(pool.clone());
-    let email_cfg = email_repo.get().await.ok();
-    let use_db = email_cfg
-        .as_ref()
-        .map(|c| smtp_is_configured_db(c))
-        .unwrap_or(false);
+    if !had_pass {
+        // Create a password reset token so the user can set their password
+        let reset = PasswordReset::new(user.user_id.clone());
+        user_repo.create_password_reset_token(&reset).await?;
 
-    let email_sent = if use_db || smtp_is_configured(&settings) {
-        let subject = "Your Magnolia account has been approved";
-        let body = format!(
-            "Your registration application has been approved!\n\nClick the link below to set your password and log in:\n{}\n\nThis link expires in 1 hour.",
-            setup_link
-        );
-        let result = if use_db {
-            send_email_db(
-                email_cfg.as_ref().unwrap(),
-                &application.email,
-                subject,
-                &body,
-            )
-            .await
-        } else {
-            send_email(&settings, &application.email, subject, &body).await
-        };
-        match result {
-            Ok(_) => {
-                tracing::info!("Account setup email sent to {}", application.email);
-                true
-            }
-            Err(e) => {
-                tracing::error!("Failed to send setup email to {}: {}", application.email, e);
+        let base_url = settings.base_url.trim_end_matches('/').to_string();
+        let setup_link = format!("{}/#reset-password/{}", base_url, reset.token);
+        // Try to send setup email, DB settings take priority over env vars
+        let email_repo = EmailSettingsRepository::new(pool.clone());
+        let email_cfg = email_repo.get().await.ok();
+        let use_db = email_cfg
+            .as_ref()
+            .map(|c| smtp_is_configured_db(c))
+            .unwrap_or(false);
+
+        let email_sent = if let Some(ref email_addr) = application.email {
+            if use_db || smtp_is_configured(&settings) {
+                let subject = "Your Magnolia account has been approved";
+                let body = format!(
+                    "Your registration application has been approved!\n\nClick the link below to set your password and log in:\n{}\n\nThis link expires in 1 hour.",
+                    setup_link
+                );
+                let result = if use_db {
+                    send_email_db(email_cfg.as_ref().unwrap(), email_addr, subject, &body).await
+                } else {
+                    send_email(&settings, email_addr, subject, &body).await
+                };
+                match result {
+                    Ok(_) => {
+                        tracing::info!("Account setup email sent to {}", email_addr);
+                        true
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to send setup email to {}: {}", email_addr, e);
+                        false
+                    }
+                }
+            } else {
                 false
             }
-        }
-    } else {
-        false
-    };
+        } else {
+            false
+        };
 
-    Ok(Json(ApproveApplicationResponse {
-        user_id: user.user_id,
-        email: application.email,
-        setup_link: if !email_sent { Some(setup_link) } else { None },
-        email_sent,
-    }))
+        Ok(Json(ApproveApplicationResponse {
+            user_id: user.user_id,
+            email: application.email,
+            setup_link: if !email_sent { Some(setup_link) } else { None },
+            email_sent,
+        }))
+    } else {
+        Ok(Json(ApproveApplicationResponse {
+            user_id: user.user_id,
+            email: application.email,
+            setup_link: None,
+            email_sent: false,
+        }))
+    }
 }
 
 /// POST /api/admin/applications/:id/deny
@@ -983,6 +838,7 @@ fn app_to_response(app: RegisterApplication) -> ApplicationResponse {
     let is_expired = app.is_expired();
     ApplicationResponse {
         application_id: app.application_id,
+        username: app.username,
         email: app.email,
         display_name: app.display_name,
         message: app.message,
@@ -995,7 +851,7 @@ fn app_to_response(app: RegisterApplication) -> ApplicationResponse {
     }
 }
 
-// ── STUN/TURN server management ──────────────────────────────────────────────
+//  STUN/TURN server management
 
 fn stun_to_response(s: StunServer) -> StunServerResponse {
     StunServerResponse {
@@ -1077,6 +933,29 @@ pub async fn admin_update_stun_server(
         .await?
         .ok_or_else(|| AppError::Internal("STUN server missing after update".to_string()))?;
     Ok(Json(stun_to_response(updated)))
+}
+
+// Under a TODO
+/// GET /api/admin/embedded-turn
+/// Returns the embedded TURN server status and addresses, if configured.
+pub async fn admin_get_embedded_turn(
+    State((_pool, _settings)): State<AppState>,
+    Extension(_auth): Extension<AuthMiddleware>,
+) -> Json<serde_json::Value> {
+    match turn::TurnConfig::from_env() {
+        Ok(cfg) if cfg.enabled => {
+            let ip = &cfg.external_ip;
+            let port = cfg.listen_addr.port();
+            Json(serde_json::json!({
+                "enabled": true,
+                "stun_url": format!("stun:{ip}:{port}"),
+                "turn_url": format!("turn:{ip}:{port}"),
+                "turn_url_tcp": format!("turn:{ip}:{port}?transport=tcp"),
+                "realm": cfg.realm,
+            }))
+        }
+        _ => Json(serde_json::json!({ "enabled": false })),
+    }
 }
 
 /// DELETE /api/admin/stun-servers/:id

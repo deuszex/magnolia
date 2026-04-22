@@ -2,7 +2,7 @@
 
 use axum::{
     http::{StatusCode, header},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 use crate::embedded::TemplateAssets;
@@ -11,12 +11,14 @@ pub mod admin;
 pub mod auth;
 pub mod calling;
 pub mod comment;
+pub mod email_html;
 pub mod events;
 pub mod global_call;
 pub mod link_preview;
 pub mod media;
 pub mod messaging;
 pub mod post;
+pub mod proxy_user;
 pub mod setup;
 pub mod static_files;
 pub mod tag;
@@ -40,9 +42,4 @@ pub async fn serve_app() -> Response {
             .body(axum::body::Body::from("Template not found"))
             .unwrap(),
     }
-}
-
-/// Search endpoint (legacy - may be removed)
-pub async fn search_products() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, "Search not implemented")
 }

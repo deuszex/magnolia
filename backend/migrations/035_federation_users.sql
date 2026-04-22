@@ -1,6 +1,6 @@
 -- Remote users we cache minimal profiles for 
 -- Only users who have opted in to sharing on the remote server are listed here.
--- No post content, no message content — just enough to identify them in the UI.
+-- No post content, no message content - just enough to identify them in the UI.
 CREATE TABLE IF NOT EXISTS federation_users (
     id TEXT PRIMARY KEY, -- local UUID
     server_connection_id TEXT NOT NULL REFERENCES server_connections(id) ON DELETE CASCADE,

@@ -6,7 +6,7 @@
 //   { v: 2, salt: <b64>, iv: <b64>, data: <b64 encrypted private key JWK>, pub: <JWK object> }
 // The server stores the blob opaquely and cannot decrypt it.
 var e2e = (function () {
-    var keyPair = null; // { privateKey, publicKey } — CryptoKey objects
+    var keyPair = null; // { privateKey, publicKey }, CryptoKey objects
     var initPromise = null; // guards against concurrent init() calls
     var pubKeyCache = {}; // userId -> CryptoKey (recipient public keys)
     var sharedKeyCache = {}; // userId -> CryptoKey (derived AES keys)
@@ -38,7 +38,7 @@ var e2e = (function () {
         );
     }
 
-    // Encrypt the private key JWK with passphrase — returns { salt, iv, data } (all base64)
+    // Encrypt the private key JWK with passphrase, returns { salt, iv, data } (all base64)
     async function wrapPrivateKey(privateKey, passphrase) {
         var salt = crypto.getRandomValues(new Uint8Array(16));
         var iv = crypto.getRandomValues(new Uint8Array(12));
@@ -53,7 +53,7 @@ var e2e = (function () {
         return { salt: _b64(salt), iv: _b64(iv), data: _b64(new Uint8Array(ciphertext)) };
     }
 
-    // Decrypt the private key JWK — throws DOMException on wrong passphrase
+    // Decrypt the private key JWK, throws DOMException on wrong passphrase
     async function unwrapPrivateKey(blob, passphrase) {
         var salt = _fromb64(blob.salt);
         var iv = _fromb64(blob.iv);
@@ -219,17 +219,17 @@ var e2e = (function () {
 
         if (blob) {
             if (blob.v !== 2 || !blob.salt || !blob.iv || !blob.data || !blob.pub) {
-                // Unrecognised or corrupt format — treat as no key and generate a fresh one
+                // Unrecognised or corrupt format, treat as no key and generate a fresh one
                 blob = null;
             } else {
-                // Existing key — prompt for passphrase to unwrap, retry on wrong passphrase
+                // Existing key, prompt for passphrase to unwrap, retry on wrong passphrase
                 var errorMsg = null;
                 while (!keyPair) {
                     var passphrase;
                     try {
                         passphrase = await promptPassphrase(false, errorMsg);
                     } catch (_) {
-                        // User skipped — leave keyPair null, graceful degradation applies
+                        // User skipped, leave keyPair null, graceful degradation applies
                         return;
                     }
                     try {
@@ -237,38 +237,16 @@ var e2e = (function () {
                         var publicKey = await crypto.subtle.importKey('jwk', blob.pub, ECDH_ALGO, true, []);
                         keyPair = { privateKey: privateKey, publicKey: publicKey };
                     } catch (_) {
-                        errorMsg = 'Wrong passphrase — please try again.';
+                        errorMsg = 'Wrong passphrase, please try again.';
                     }
                 }
             }
         }
 
         if (!keyPair) {
-            // No key on server (first device) — generate a new key pair and store it
-            var newPair = await crypto.subtle.generateKey(ECDH_ALGO, true, ['deriveKey']);
-            var passphrase;
-            try {
-                passphrase = await promptPassphrase(true, null);
-            } catch (_) {
-                // User skipped setup — no E2E this session, nothing to store
-                return;
-            }
-            var wrapped = await wrapPrivateKey(newPair.privateKey, passphrase);
-            var pubJwk = await crypto.subtle.exportKey('jwk', newPair.publicKey);
-            var blobJson = JSON.stringify({
-                v: 2,
-                salt: wrapped.salt,
-                iv: wrapped.iv,
-                data: wrapped.data,
-                pub: pubJwk
-            });
-            try {
-                await api.put('/api/auth/me/e2e-key', { e2e_key_blob: blobJson });
-            } catch (e) {
-                console.warn('E2E: Failed to store key blob on server:', e);
-                // Proceed with the in-memory key for this session
-            }
-            keyPair = newPair;
+            // No key blob on server - user hasn't set up E2E yet.
+            // Don't prompt; they can set up encryption from the Security settings page.
+            return;
         }
 
         // Upload public key so others can encrypt messages to us
@@ -277,6 +255,34 @@ var e2e = (function () {
             await api.put('/api/auth/me/public-key', { public_key: JSON.stringify(pubJwk) });
         } catch (e) {
             console.warn('E2E: Failed to upload public key:', e);
+        }
+    }
+
+    // Generate a fresh E2E key pair, prompt for a passphrase, store on server.
+    // Called explicitly from the Security settings page.
+    async function setup() {
+        if (keyPair) return; // already initialised
+        if (!window.crypto || !window.crypto.subtle) throw new Error('Web Crypto API not available');
+
+        var newPair = await crypto.subtle.generateKey(ECDH_ALGO, true, ['deriveKey']);
+        var passphrase = await promptPassphrase(true, null); // throws Error('cancelled') on skip
+        var wrapped = await wrapPrivateKey(newPair.privateKey, passphrase);
+        var pubJwk = await crypto.subtle.exportKey('jwk', newPair.publicKey);
+        var blobJson = JSON.stringify({
+            v: 2,
+            salt: wrapped.salt,
+            iv: wrapped.iv,
+            data: wrapped.data,
+            pub: pubJwk
+        });
+        await api.put('/api/auth/me/e2e-key', { e2e_key_blob: blobJson });
+        keyPair = newPair;
+
+        // Upload public key
+        try {
+            await api.put('/api/auth/me/public-key', { public_key: JSON.stringify(pubJwk) });
+        } catch (e) {
+            console.warn('E2E: Failed to upload public key after setup:', e);
         }
     }
 
@@ -315,13 +321,13 @@ var e2e = (function () {
         return aesKey;
     }
 
-    // Encrypt plaintext for a recipient — returns JSON envelope string.
+    // Encrypt plaintext for a recipient, returns JSON envelope string.
     // Throws if encryption is not possible (no local key or recipient has no key).
     async function encrypt(plaintext, recipientUserId) {
         if (!plaintext) return plaintext;
-        if (!keyPair) throw new Error('E2E keys not initialised — cannot send encrypted message');
+        if (!keyPair) throw new Error('E2E keys not initialised, cannot send encrypted message');
         var aesKey = await getSharedKey(recipientUserId);
-        if (!aesKey) throw new Error('Recipient has no encryption key on record — cannot send encrypted message');
+        if (!aesKey) throw new Error('Recipient has no encryption key on record, cannot send encrypted message');
         var iv = crypto.getRandomValues(new Uint8Array(12));
         var enc = new TextEncoder();
         var ciphertext = await crypto.subtle.encrypt(
@@ -336,14 +342,14 @@ var e2e = (function () {
         });
     }
 
-    // Decrypt an envelope — returns plaintext, '[encrypted]', or the original string
+    // Decrypt an envelope, returns plaintext, '[encrypted]', or the original string
     async function decrypt(content, senderUserId) {
-        if (!isEncrypted(content)) return content; // legacy plaintext
+        if (!isEncrypted(content)) return content;
         if (!keyPair) return '[encrypted]';
         try {
             var envelope = JSON.parse(content);
             var aesKey = await getSharedKey(senderUserId);
-            if (!aesKey) return '[encrypted — key unavailable]';
+            if (!aesKey) return '[encrypted, key unavailable]';
             var iv = _fromb64(envelope.iv);
             var data = _fromb64(envelope.data);
             var plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, aesKey, data);
@@ -367,5 +373,15 @@ var e2e = (function () {
         return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); });
     }
 
-    return { init: init, encrypt: encrypt, decrypt: decrypt, isEncrypted: isEncrypted, evictCache: evictCache };
+    function isReady() { return keyPair !== null; }
+
+    // Clear all in-memory state (call before regenerating keys)
+    function reset() {
+        keyPair = null;
+        initPromise = null;
+        pubKeyCache = {};
+        sharedKeyCache = {};
+    }
+
+    return { init: init, setup: setup, reset: reset, isReady: isReady, encrypt: encrypt, decrypt: decrypt, isEncrypted: isEncrypted, evictCache: evictCache };
 })();

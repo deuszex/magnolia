@@ -16,7 +16,9 @@ var api = (function () {
         var data = text ? JSON.parse(text) : null;
         if (!res.ok) {
             var msg = (data && data.error) || res.statusText || 'Request failed';
-            throw new Error(msg);
+            var err = new Error(msg);
+            err.status = res.status;
+            throw err;
         }
         return data;
     }

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS post_contents (
     original_filename TEXT,
     mime_type TEXT,
     file_size INTEGER,
+    content_nonce TEXT,
     created_at TEXT NOT NULL
 );
 

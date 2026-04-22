@@ -1,7 +1,9 @@
 CREATE TABLE IF NOT EXISTS register_applications (
     application_id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
+    email TEXT,
     display_name TEXT,
+    username TEXT,
+    password TEXT,
     message TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL,

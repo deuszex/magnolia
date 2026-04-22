@@ -32,7 +32,7 @@ pub struct UserConnection {
     pub tx: mpsc::UnboundedSender<String>,
 }
 
-/// Global registry of connected users — supports multiple connections per user
+/// Global registry of connected users, supports multiple connections per user
 /// (e.g. main tab + call tab each have their own WebSocket)
 pub type ConnectionRegistry = Arc<RwLock<HashMap<String, Vec<UserConnection>>>>;
 
@@ -98,15 +98,13 @@ async fn send_to_user_or_federate(
         send_to_user(registry, target_user_id, &msg.to_string()).await;
         return;
     }
-    // User not local — look up their federated server via the call's conversation.
+    // User is not local, look up their federated server via the call's conversation.
     let call_repo = CallRepository::new(pool.clone());
     let conv_id = match call_repo.get_by_id(call_id).await {
         Ok(Some(c)) => c.conversation_id,
         _ => return,
     };
-    if let Ok(fed_members) =
-        crate::federation::repo::list_federated_members(pool, &conv_id).await
-    {
+    if let Ok(fed_members) = crate::federation::repo::list_federated_members(pool, &conv_id).await {
         if let Some(fed) = fed_members
             .iter()
             .find(|m| m.remote_user_id == target_user_id)
@@ -115,12 +113,8 @@ async fn send_to_user_or_federate(
             let pool_clone = pool.clone();
             let msg_clone = msg.clone();
             tokio::spawn(async move {
-                crate::federation::hub::send_call_signal_to_peer(
-                    &pool_clone,
-                    &conn_id,
-                    msg_clone,
-                )
-                .await;
+                crate::federation::hub::send_call_signal_to_peer(&pool_clone, &conn_id, msg_clone)
+                    .await;
             });
         }
     }
@@ -128,24 +122,17 @@ async fn send_to_user_or_federate(
 
 /// Check if a signaling message (SDP/ICE/key_exchange) belongs to a call owned by a remote
 /// server. If so, relay the message to that server and return `true`.
-/// Returns `false` when the call is local (or unknown) — caller should handle normally.
-async fn try_relay_sdp_to_origin(
-    pool: &AnyPool,
-    call_id: &str,
-    msg: serde_json::Value,
-) -> bool {
+/// Returns `false` when the call is local (or unknown), caller should handle normally.
+async fn try_relay_sdp_to_origin(pool: &AnyPool, call_id: &str, msg: serde_json::Value) -> bool {
     match CallRepository::new(pool.clone()).get_by_id(call_id).await {
         Ok(Some(_)) => return false, // Call exists locally — handle normally.
         Ok(None) => {}               // Call not found locally — may be federated.
         Err(_) => return false,
     }
-    if let Some(origin_conn) =
-        crate::federation::hub::get_federated_call_origin(call_id).await
-    {
+    if let Some(origin_conn) = crate::federation::hub::get_federated_call_origin(call_id).await {
         let pool_clone = pool.clone();
         tokio::spawn(async move {
-            crate::federation::hub::send_call_signal_to_peer(&pool_clone, &origin_conn, msg)
-                .await;
+            crate::federation::hub::send_call_signal_to_peer(&pool_clone, &origin_conn, msg).await;
         });
         return true;
     }
@@ -327,7 +314,7 @@ async fn dispatch_signal(
     let signal: SignalMessage = serde_json::from_str(msg)
         .map_err(|e| AppError::BadRequest(format!("Invalid signal message: {}", e)))?;
 
-    // Log message type only — never log SDP/ICE/key content
+    // Log message type only. Never log SDP/ICE/key content
     tracing::info!("WS signal from {}: {}", user_id, signal.type_name());
 
     match signal {
@@ -577,7 +564,7 @@ async fn verify_signaling_auth(
         Some(p) if p.status == "joined" => {} // local joined participant ✓
         Some(_) => return Err(AppError::Forbidden), // local but not joined
         None => {
-            // Not a local participant — check federated conversation members.
+            // Not a local participant, check federated conversation members.
             let fed_members =
                 crate::federation::repo::list_federated_members(pool, &call.conversation_id)
                     .await
@@ -585,7 +572,7 @@ async fn verify_signaling_auth(
             if !fed_members.iter().any(|m| m.remote_user_id == target_id) {
                 return Err(AppError::Forbidden);
             }
-            // Known federated user — allow.
+            // Known federated users should be allow. TODO is there an attack vector here?
         }
     }
 
@@ -762,7 +749,7 @@ async fn handle_call_initiate(
 
         // Relay to federated members of this conversation.
         // Note: we do NOT add proxy call_participants for remote users because
-        // call_participants.user_id has a FK to user_accounts — remote user IDs
+        // call_participants.user_id has a FK to user_accounts, while remote user IDs
         // don't exist locally. verify_signaling_auth handles federated targets by
         // checking federated_conversation_members directly.
         if let Ok(fed_members) =
@@ -873,7 +860,7 @@ async fn handle_call_accept(
                 )
                 .await;
             });
-            // Do NOT send call_accepted to the receiver here — it would trigger
+            // Do NOT send call_accepted to the receiver here, it would trigger
             // createAndSendOffer with their own user_id as the target (they would
             // peer-connect to themselves). The receiver just waits for the initiator's
             // SDP offer, which arrives after the origin server processes call_accept.
@@ -883,7 +870,7 @@ async fn handle_call_accept(
     }
     let call = call_opt.unwrap();
 
-    // Open calls don't have an accept flow — use CallJoin instead
+    // Open calls don't have an accept flow, use CallJoin instead
     if call.is_open != 0 {
         return Err(AppError::BadRequest(
             "Use call_join for open calls".to_string(),
@@ -1063,8 +1050,7 @@ async fn handle_call_hangup(
 
     // If the call record doesn't exist locally it may be owned by a remote server.
     if call_opt.is_none() {
-        if let Some(origin_conn) =
-            crate::federation::hub::get_federated_call_origin(call_id).await
+        if let Some(origin_conn) = crate::federation::hub::get_federated_call_origin(call_id).await
         {
             let payload = serde_json::json!({
                 "type": "call_hangup",
@@ -1113,7 +1099,7 @@ async fn handle_call_hangup(
         .map_err(|e| AppError::Internal(format!("Failed to list participants: {}", e)))?;
 
     if active_count <= 1 {
-        // Call is over — end it
+        // End call when it's over
         let duration = if let Some(ref started) = call.started_at {
             if let Ok(start_time) = chrono::DateTime::parse_from_rfc3339(started) {
                 let end_time = Utc::now();
@@ -1287,7 +1273,7 @@ pub async fn relay_federated_call_signal(
     };
 
     match type_str.as_str() {
-        // A remote user accepted a call initiated here — forward to local participants.
+        // A remote user accepted a call initiated here, forward to local participants.
         "call_accept" | "call_accepted" => {
             let call_id = match payload.get("call_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
@@ -1317,7 +1303,7 @@ pub async fn relay_federated_call_signal(
             if let Ok(participants) = call_repo.list_participants(&call_id).await {
                 let msg = accepted_msg.to_string();
                 for p in &participants {
-                    // Skip the proxy participant — they're on the remote server.
+                    // Skip the proxy participant, they're on the remote server.
                     if p.user_id != remote_uid {
                         send_to_user(registry, &p.user_id, &msg).await;
                     }
@@ -1381,7 +1367,7 @@ pub async fn relay_federated_call_signal(
             }
         }
 
-        // A remote user rejected the call — forward to local participants.
+        // A remote user rejected the call, forward to local participants.
         "call_reject" | "call_rejected" => {
             let call_id = match payload.get("call_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
@@ -1396,7 +1382,7 @@ pub async fn relay_federated_call_signal(
             }
         }
 
-        // Call ended on the remote side — forward to local participants and clean up relay.
+        // Call ended on the remote side, forward to local participants and clean up relay.
         "call_ended" => {
             let call_id = match payload.get("call_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
@@ -1425,7 +1411,7 @@ pub async fn relay_federated_call_signal(
                 None => return,
             };
             if let Some(reg) = global_user_registry() {
-                // Try local delivery first — no DB needed, no chain depth added.
+                // Try local delivery first, no DB needed, no chain depth added.
                 let is_local = reg.read().await.contains_key(&target);
                 if is_local {
                     send_to_user(reg, &target, &payload.to_string()).await;
@@ -1437,12 +1423,13 @@ pub async fn relay_federated_call_signal(
             let payload_clone = payload.clone();
             tokio::spawn(async move {
                 if let Some(reg) = global_user_registry() {
-                    send_to_user_or_federate(reg, &pool_clone, &call_id, &target, &payload_clone).await;
+                    send_to_user_or_federate(reg, &pool_clone, &call_id, &target, &payload_clone)
+                        .await;
                 }
             });
         }
 
-        // Unknown or unhandled signal type — ignore.
+        // Unknown or unhandled signal type, ignore.
         _ => {
             tracing::debug!("relay_federated_call_signal: unhandled type '{}'", type_str);
         }

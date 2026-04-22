@@ -369,7 +369,8 @@ pub struct S2SRequestMeta {
 
 // S2S post sharing
 
-/// Compact media descriptor sent between servers — no URLs, just IDs and metadata.
+/// Compact media descriptor sent between servers to create post/message stubs with no URLs or content,
+/// just IDs and metadata. Unless a user is directly requesting the media, we don't pollute.
 /// The receiving server creates a local stub row and fetches the bytes lazily.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederatedMediaRef {
@@ -406,13 +407,13 @@ pub struct FederatedPostEntry {
     pub post_id: String,
     pub user_id: String,
     pub posted_at: String,
-    /// SHA-256 of the serialised `contents` — detects edits on re-fetch.
+    /// SHA-256 of the serialised `contents`. As contents are hashed, this detects edits on re-fetch.
     pub content_hash: String,
     pub contents: Vec<FederatedPostContent>,
     pub author_name: Option<String>,
     pub author_avatar_url: Option<String>,
     pub tags: Vec<String>,
-    /// Originating server base URL — set by the sender, used for media URL resolution.
+    /// Originating server base URL, set by the sender, used for media URL resolution.
     pub server_address: String,
 }
 

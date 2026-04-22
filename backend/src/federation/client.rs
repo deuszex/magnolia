@@ -243,7 +243,7 @@ pub async fn send_connection_reject(
         address: our_address.to_string(),
         reason,
     };
-    // Best-effort — don't fail our own operation if the peer is unreachable.
+    // Best-effort, as in "you can't do better if the other side is offline" don't fail our own operation if the peer is unreachable.
     if let Err(e) = post_signed(client, identity, our_address, &url, &payload).await {
         warn!(
             "Could not deliver rejection notice to {}: {}",
@@ -254,7 +254,7 @@ pub async fn send_connection_reject(
 }
 
 /// POST a disconnect notice to `peer_address/api/s2s/disconnect`.
-/// Best-effort — used when revoking a connection so the peer stops reconnecting.
+/// Best-effort, as in "you can't do better if the other side is offline" used when revoking a connection so the peer stops reconnecting.
 pub async fn send_disconnect(
     client: &S2SClient,
     identity: &ServerIdentity,
@@ -340,7 +340,8 @@ pub async fn send_discovery(
     shared_secret: &[u8],
 ) -> Result<(), String> {
     let url = format!("{}/api/s2s/discovery", peer_address.trim_end_matches('/'));
-    // Best-effort — discovery is advisory, not critical.
+    // Best-effort, as in "you can't do better if the other side is offline". Discovery is advisory, not critical.
+    // Discovery is not a "we can't operate if it doesn't happen work."
     if let Err(e) =
         post_signed_encrypted(client, identity, our_address, &url, &push, shared_secret).await
     {
@@ -411,7 +412,8 @@ pub async fn fetch_posts(
 /// GET `peer_address/api/s2s/media/{media_id}?remote_user_id={requesting_user_id}`
 /// and return the raw file bytes.
 ///
-/// `requesting_user_id` is the local user triggering the fetch — sent so the
+/// `requesting_user_id` is the local user triggering the fetch, so it is a "remote_user_id" from the
+/// viewpoint of the receiving server, sent so the
 /// peer can enforce its block/ban rules before streaming the file.
 pub async fn fetch_media(
     client: &S2SClient,
@@ -430,7 +432,10 @@ pub async fn fetch_media(
     let resp = get_signed(client, identity, our_address, &url).await?;
 
     if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        return Err(format!("Media {} on {} is blocked for this user", media_id, peer_address));
+        return Err(format!(
+            "Media {} on {} is blocked for this user",
+            media_id, peer_address
+        ));
     }
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(format!("Media {} not found on {}", media_id, peer_address));
@@ -438,7 +443,9 @@ pub async fn fetch_media(
     if !resp.status().is_success() {
         return Err(format!(
             "Media fetch {} from {} failed: {}",
-            media_id, peer_address, resp.status()
+            media_id,
+            peer_address,
+            resp.status()
         ));
     }
 

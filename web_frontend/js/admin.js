@@ -1,4 +1,4 @@
-// Admin panel module — user management, invites, site config, theme
+// Admin panel module, user management, invites, site config, theme
 var admin = (function () {
 
     // Helpers 
@@ -7,7 +7,7 @@ var admin = (function () {
         var e = document.createElement(tag);
         if (props) Object.keys(props).forEach(function (k) {
             if (k === 'class') e.className = props[k];
-            else if (k === 'html') e.innerHTML = props[k]; // only pass hardcoded literals here — never user data
+            else if (k === 'html') e.innerHTML = props[k]; // only pass hardcoded literals here, never user data
             else if (k === 'text') e.textContent = props[k];
             else e[k] = props[k];
         });
@@ -44,7 +44,8 @@ var admin = (function () {
             { id: 'email', label: 'Email' },
             { id: 'theme', label: 'Theme' },
             { id: 'stun', label: 'STUN/TURN' },
-            { id: 'federation', label: 'Federation' }
+            { id: 'federation', label: 'Federation' },
+            { id: 'proxies', label: 'Proxy Accounts' }
         ];
         var nav = el('div', { class: 'admin-subnav' });
         pages.forEach(function (p) {
@@ -100,9 +101,9 @@ var admin = (function () {
             data.users.forEach(function (u) {
                 var tr = el('tr');
                 tr.innerHTML =
-                    '<td class="primary">' + escHtml(u.username) + '</td>' +
-                    '<td>' + escHtml(u.email || '—') + '</td>' +
-                    '<td>' + escHtml(u.display_name || '—') + '</td>' +
+                    '<td class="primary">' + escHtml(u.username) + '<br><span class="admin-uuid">' + escHtml(u.user_id) + '</span></td>' +
+                    '<td>' + escHtml(u.email || '-') + '</td>' +
+                    '<td>' + escHtml(u.display_name || '-') + '</td>' +
                     '<td>' + (u.active ? badge('Active', 'status-active') : badge('Inactive', 'status-inactive')) + '</td>' +
                     '<td>' + (u.admin ? badge('Admin', 'status-admin') : '') + (u.verified ? '' : badge('Unverified', 'status-inactive')) + '</td>' +
                     '<td>' + fmtDate(u.created_at) + '</td>';
@@ -164,7 +165,7 @@ var admin = (function () {
             '<h3>Add User</h3>' +
             '<div class="form-group"><label>Username <span style="color:var(--t-danger)">*</span></label><input type="text" id="cu-username" placeholder="3–30 characters" autocomplete="off"></div>' +
             '<div class="form-group"><label>Email <span style="color:var(--t-muted);font-weight:normal">(optional)</span></label><input type="email" id="cu-email" placeholder="user@example.com"></div>' +
-            '<div class="form-group"><label>Password <span style="color:var(--t-danger)">*</span></label><input type="password" id="cu-pw" placeholder="Min 12 characters, 1 number, 1 symbol (?!$...)"></div>' +
+            '<div class="form-group"><label>Password <span style="color:var(--t-danger)">*</span></label><input type="password" id="cu-pw" placeholder="12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...)"></div>' +
             '<div class="checkbox-row" style="margin-bottom:14px">' +
             '<label><input type="checkbox" id="cu-admin"> Admin</label>' +
             '<label><input type="checkbox" id="cu-verified" checked> Pre-verified</label>' +
@@ -251,7 +252,7 @@ var admin = (function () {
         var msgGroup = el('div', { class: 'form-group', style: 'margin-top:10px' });
         msgGroup.appendChild(el('label', { text: 'Personal message (optional)', style: 'display:block;margin-bottom:4px' }));
         msgGroup.appendChild(el('div', { style: 'font-size:0.78rem;color:var(--t-muted);margin-bottom:6px', text: 'Included in the email so the recipient knows who invited them and why.' }));
-        var msgTextarea = el('textarea', { class: 'form-input', rows: '3', placeholder: 'Hey Alice, I\'ve set up a private space for our team — looking forward to having you on board!', style: 'width:100%;resize:vertical' });
+        var msgTextarea = el('textarea', { class: 'form-input', rows: '3', placeholder: 'Hey Alice, I\'ve set up a private space for our team, looking forward to having you on board!', style: 'width:100%;resize:vertical' });
         msgGroup.appendChild(msgTextarea);
 
         var expiryRow = el('div', { class: 'form-group', style: 'display:flex;gap:12px;align-items:center;margin-top:8px' });
@@ -313,7 +314,7 @@ var admin = (function () {
                 var tr = el('tr');
                 tr.innerHTML =
                     '<td class="primary"><a href="' + escHtml(link) + '" style="font-size:11px;word-break:break-all">' + escHtml(link) + '</a></td>' +
-                    '<td>' + escHtml(inv.email || '—') + '</td>' +
+                    '<td>' + escHtml(inv.email || '-') + '</td>' +
                     '<td>' + fmtDate(inv.expires_at) + '</td>' +
                     '<td>' + statusLabel + '</td>';
 
@@ -358,7 +359,7 @@ var admin = (function () {
         overlay.style.display = 'flex';
         dialog.innerHTML =
             '<h3>Create Invite</h3>' +
-            '<div class="form-group"><label>Email (optional — binds invite to a specific address)</label><input type="email" id="ci-email" placeholder="Leave blank for open invite"></div>' +
+            '<div class="form-group"><label>Email (optional, binds invite to a specific address)</label><input type="email" id="ci-email" placeholder="Leave blank for open invite"></div>' +
             '<div class="form-group"><label>Expiry (hours, default 168 = 7 days)</label><input type="number" id="ci-hours" value="168" min="1" max="8760"></div>' +
             '<div id="ci-error"></div>' +
             '<div class="dialog-actions">' +
@@ -426,7 +427,7 @@ var admin = (function () {
             var table = el('table', { class: 'admin-table' });
             table.innerHTML =
                 '<thead><tr>' +
-                '<th>Email</th><th>Name</th><th>Message</th><th>Status</th><th>Submitted</th><th>Expires</th><th>Actions</th>' +
+                '<th>Username</th><th>Email</th><th>Name</th><th>Message</th><th>Status</th><th>Submitted</th><th>Actions</th>' +
                 '</tr></thead>';
             var tbody = el('tbody');
 
@@ -438,12 +439,12 @@ var admin = (function () {
 
                 var tr = el('tr');
                 tr.innerHTML =
-                    '<td class="primary">' + escHtml(a.email) + '</td>' +
-                    '<td>' + escHtml(a.display_name || '—') + '</td>' +
-                    '<td style="max-width:180px;white-space:normal">' + escHtml(a.message ? a.message.substring(0, 80) + (a.message.length > 80 ? '…' : '') : '—') + '</td>' +
+                    '<td class="primary">' + escHtml(a.username || '-') + '</td>' +
+                    '<td>' + escHtml(a.email || '-') + '</td>' +
+                    '<td>' + escHtml(a.display_name || '-') + '</td>' +
+                    '<td style="max-width:160px;white-space:normal">' + escHtml(a.message ? a.message.substring(0, 80) + (a.message.length > 80 ? '…' : '') : '-') + '</td>' +
                     '<td>' + badge(a.status, statusCls) + (expired && a.status === 'pending' ? badge('Expired', 'status-inactive') : '') + '</td>' +
-                    '<td>' + fmtDate(a.created_at) + '</td>' +
-                    '<td>' + fmtDate(a.expires_at) + '</td>';
+                    '<td>' + fmtDate(a.created_at) + '</td>';
 
                 var actions = el('td');
                 var actDiv = el('div', { class: 'admin-actions' });
@@ -454,9 +455,9 @@ var admin = (function () {
                         approveBtn.disabled = true;
                         api.post('/api/admin/applications/' + a.application_id + '/approve').then(function (res) {
                             if (res.setup_link) {
-                                showSetupLinkDialog(res.email, res.setup_link);
+                                showSetupLinkDialog(res.email || a.username, res.setup_link);
                             } else {
-                                showMsg(section, 'Approved. Setup email sent to ' + res.email, 'success');
+                                showMsg(section, 'Approved. Setup email sent to ' + (res.email || a.username), 'success');
                             }
                             renderApplicationsFiltered(feedArea, statusFilter);
                         }).catch(function (err) {
@@ -468,7 +469,7 @@ var admin = (function () {
 
                     var denyBtn = el('button', { class: 'btn btn-small btn-danger', text: 'Deny' });
                     denyBtn.onclick = function () {
-                        if (!confirm('Deny application from ' + a.email + '?')) return;
+                        if (!confirm('Deny application from ' + (a.username || a.email || 'this applicant') + '?')) return;
                         api.post('/api/admin/applications/' + a.application_id + '/deny').then(function () {
                             renderApplicationsFiltered(feedArea, statusFilter);
                         }).catch(function (err) { showMsg(section, err.message || 'Error', 'error'); });
@@ -580,7 +581,7 @@ var admin = (function () {
             if (cfg.encryption_key_configured) {
                 section.appendChild(toggle('Encryption at Rest', 'Encrypt stored media files', 'sc-enc', cfg.encryption_at_rest_enabled));
             } else {
-                section.appendChild(el('div', { class: 'info-box', text: 'Encryption at rest is unavailable — set ENCRYPTION_AT_REST_KEY environment variable to enable it.' }));
+                section.appendChild(el('div', { class: 'info-box', text: 'Encryption at rest is unavailable, set ENCRYPTION_AT_REST_KEY environment variable to enable it.' }));
             }
 
             // Registration mode
@@ -625,6 +626,36 @@ var admin = (function () {
             ));
             section.appendChild(inviteSection);
 
+            var resetSection = el('div', { style: 'margin-top:20px;margin-bottom:14px' });
+            resetSection.appendChild(el('div', { class: 'pref-section-title', text: 'Password Reset Methods', style: 'font-size:0.875rem;color:var(--t-secondary);margin-bottom:8px' }));
+            resetSection.appendChild(toggle(
+                'Email Reset',
+                'Allow users to receive a password reset link by email. Requires SMTP to be configured.',
+                'sc-reset-email',
+                cfg.password_reset_email_enabled
+            ));
+            resetSection.appendChild(toggle(
+                'Recovery Key Reset',
+                'Allow users to reset their password using a cryptographic recovery key they download from their account settings.',
+                'sc-reset-key',
+                cfg.password_reset_signing_key_enabled
+            ));
+            section.appendChild(resetSection);
+
+            var proxySection = el('div', { style: 'margin-top:20px;margin-bottom:14px' });
+            proxySection.appendChild(el('div', { class: 'pref-section-title', text: 'Proxy Accounts', style: 'font-size:0.875rem;color:var(--t-secondary);margin-bottom:8px' }));
+            proxySection.appendChild(toggle(
+                'Enable Proxy User System',
+                'Allow automation proxy accounts that can post and message on behalf of users or independently.',
+                'sc-proxy-system',
+                cfg.proxy_user_system
+            ));
+            var proxyPiecesInput = el('input', { type: 'number', id: 'sc-proxy-pieces', value: cfg.proxy_rate_limit_pieces || 1, min: '1' });
+            proxySection.appendChild(field('Media Upload Rate Limit (files/minute)', proxyPiecesInput));
+            var proxyBytesInput = el('input', { type: 'number', id: 'sc-proxy-bytes', value: Math.round((cfg.proxy_rate_limit_bytes || 12582912) / 1048576), min: '1' });
+            proxySection.appendChild(field('Media Upload Rate Limit (MB/minute)', proxyBytesInput));
+            section.appendChild(proxySection);
+
             var saveBtn = el('button', { class: 'btn btn-primary', text: 'Save Changes' });
             saveBtn.onclick = function () {
                 var selectedMode = document.querySelector('input[name="reg-mode"]:checked');
@@ -638,7 +669,12 @@ var admin = (function () {
                     message_auto_delete_delay_hours: parseInt(document.getElementById('sc-del-hours').value, 10) || 168,
                     registration_mode: selectedMode ? selectedMode.value : cfg.registration_mode,
                     application_timeout_hours: parseInt(document.getElementById('sc-app-timeout').value, 10) || 48,
-                    enforce_invite_email: document.getElementById('sc-enforce-invite-email').checked
+                    enforce_invite_email: document.getElementById('sc-enforce-invite-email').checked,
+                    password_reset_email_enabled: document.getElementById('sc-reset-email').checked,
+                    password_reset_signing_key_enabled: document.getElementById('sc-reset-key').checked,
+                    proxy_user_system: document.getElementById('sc-proxy-system').checked,
+                    proxy_rate_limit_pieces: parseInt(document.getElementById('sc-proxy-pieces').value, 10) || 1,
+                    proxy_rate_limit_bytes: (parseInt(document.getElementById('sc-proxy-bytes').value, 10) || 12) * 1048576
                 };
                 if (cfg.encryption_key_configured) {
                     body.encryption_at_rest_enabled = document.getElementById('sc-enc').checked;
@@ -676,7 +712,7 @@ var admin = (function () {
             section.appendChild(feedback);
 
             // Live preview bar
-            var preview = el('div', { class: 'theme-preview', id: 'theme-preview-bar', text: 'Preview — button text' });
+            var preview = el('div', { class: 'theme-preview', id: 'theme-preview-bar', text: 'Preview, button text' });
             section.appendChild(preview);
 
             function colorRow(labelText, id, value) {
@@ -973,7 +1009,7 @@ var admin = (function () {
         }
 
         function wsBadge(wsState) {
-            if (!wsState) return badge('—', 'badge-neutral');
+            if (!wsState) return badge('-', 'badge-neutral');
             var map = {
                 'connected': badge('WS Live', 'badge-ok'),
                 'reconnecting': badge('Reconnecting', 'badge-warn'),
@@ -1304,6 +1340,59 @@ var admin = (function () {
         var feedback = el('div', { class: 'admin-feedback' });
         section.appendChild(feedback);
 
+        // Embedded TURN server card
+        var embeddedCard = el('div', { class: 'embedded-turn-card' });
+        section.appendChild(embeddedCard);
+        api.get('/api/admin/embedded-turn').then(function (t) {
+            if (!t.enabled) {
+                embeddedCard.innerHTML =
+                    '<div class="embedded-turn-header">' +
+                    '<span class="embedded-turn-title">Embedded TURN Server</span>' +
+                    badge('Disabled', 'status-inactive') +
+                    '</div>' +
+                    '<p class="embedded-turn-desc">Set <code>TURN_ENABLED=true</code>, <code>TURN_EXTERNAL_IP</code>, ' +
+                    'and restart the server to enable the built-in TURN relay.</p>';
+                return;
+            }
+            embeddedCard.innerHTML =
+                '<div class="embedded-turn-header">' +
+                '<span class="embedded-turn-title">Embedded TURN Server</span>' +
+                badge('Running', 'status-active') +
+                '</div>' +
+                '<p class="embedded-turn-desc">Your server is acting as a STUN/TURN relay. ' +
+                'Users can add these addresses to their WebRTC configuration, or you can add them to the list below. ' +
+                'TURN credentials are generated automatically per-user - do not enter static credentials when adding to the list.</p>' +
+                '<div class="embedded-turn-urls">' +
+                '<div class="embedded-turn-row">' +
+                '<span class="embedded-turn-label">STUN (no auth)</span>' +
+                '<code class="embedded-turn-url" id="eturn-stun">' + escHtml(t.stun_url) + '</code>' +
+                '<button class="btn btn-small" data-copy="eturn-stun">Copy</button>' +
+                '</div>' +
+                '<div class="embedded-turn-row">' +
+                '<span class="embedded-turn-label">TURN / UDP</span>' +
+                '<code class="embedded-turn-url" id="eturn-udp">' + escHtml(t.turn_url) + '</code>' +
+                '<button class="btn btn-small" data-copy="eturn-udp">Copy</button>' +
+                '</div>' +
+                '<div class="embedded-turn-row">' +
+                '<span class="embedded-turn-label">TURN / TCP</span>' +
+                '<code class="embedded-turn-url" id="eturn-tcp">' + escHtml(t.turn_url_tcp) + '</code>' +
+                '<button class="btn btn-small" data-copy="eturn-tcp">Copy</button>' +
+                '</div>' +
+                '</div>' +
+                '<p class="embedded-turn-note">TURN credentials are time-limited and derived from the session - ' +
+                'they are appended automatically to ICE config for logged-in users.</p>';
+            embeddedCard.querySelectorAll('[data-copy]').forEach(function (btn) {
+                btn.onclick = function () {
+                    var id = btn.getAttribute('data-copy');
+                    var text = document.getElementById(id).textContent;
+                    navigator.clipboard.writeText(text).then(function () {
+                        btn.textContent = 'Copied!';
+                        setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+                    });
+                };
+            });
+        }).catch(function () { embeddedCard.style.display = 'none'; });
+
         var tableWrap = el('div', { class: 'admin-table-wrap', text: 'Loading…' });
         section.appendChild(tableWrap);
         page.appendChild(section);
@@ -1326,11 +1415,11 @@ var admin = (function () {
                 var tr = el('tr');
                 tr.innerHTML =
                     '<td>' + escHtml(s.url) + '</td>' +
-                    '<td>' + (s.username ? escHtml(s.username) : '<span style="opacity:.4">—</span>') + '</td>' +
-                    '<td>' + (s.has_credential ? '<span style="opacity:.5">••••••</span>' : '<span style="opacity:.4">—</span>') + '</td>' +
+                    '<td>' + (s.username ? escHtml(s.username) : '<span style="opacity:.4">-</span>') + '</td>' +
+                    '<td>' + (s.has_credential ? '<span style="opacity:.5">••••••</span>' : '<span style="opacity:.4">-</span>') + '</td>' +
                     '<td>' + (s.enabled ? badge('Yes', 'status-active') : badge('No', 'status-inactive')) + '</td>' +
                     '<td>' + stunStatusBadge(s.last_status) + '</td>' +
-                    '<td style="font-size:11px;opacity:.6">' + (s.last_checked_at ? s.last_checked_at.replace('T', ' ').slice(0, 19) : '—') + '</td>' +
+                    '<td style="font-size:11px;opacity:.6">' + (s.last_checked_at ? s.last_checked_at.replace('T', ' ').slice(0, 19) : '-') + '</td>' +
                     '<td></td>';
                 var actTd = tr.querySelector('td:last-child');
                 var editBtn = el('button', { class: 'btn btn-small', text: 'Edit' });
@@ -1422,6 +1511,409 @@ var admin = (function () {
         };
     }
 
+    // Proxy Accounts Page
+
+    function generateHmacKey() {
+        var bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+    }
+
+    function downloadText(filename, text) {
+        var blob = new Blob([text], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function renderProxies(feedArea) {
+        feedArea.innerHTML = '';
+        var page = el('div', { class: 'admin-page' });
+        page.appendChild(renderSubNav(feedArea, 'proxies'));
+
+        var section = el('div', { class: 'admin-section' });
+        var titleRow = el('div', { class: 'admin-section-title' });
+        titleRow.appendChild(el('span', { text: 'Proxy Accounts' }));
+        var createBtn = el('button', { class: 'btn btn-primary btn-small', text: '+ Create Proxy' });
+        createBtn.onclick = function () { showCreateProxyDialog(section, function () { loadProxyList(); }); };
+        titleRow.appendChild(createBtn);
+        section.appendChild(titleRow);
+
+        var tableWrap = el('div', { class: 'table-wrap' });
+        section.appendChild(tableWrap);
+        page.appendChild(section);
+        feedArea.appendChild(page);
+
+        function loadProxyList() {
+            tableWrap.innerHTML = 'Loading…';
+            api.get('/api/admin/proxies').then(function (list) {
+                tableWrap.innerHTML = '';
+                if (!list.length) {
+                    tableWrap.appendChild(el('div', { class: 'info-box', text: 'No proxy accounts yet.' }));
+                    return;
+                }
+                var table = el('table', { class: 'admin-table' });
+                var thead = el('thead');
+                thead.innerHTML = '<tr><th>Username</th><th>Display Name</th><th>Paired User</th><th>Status</th><th>Pw</th><th>HMAC</th><th>E2E</th><th>Actions</th></tr>';
+                table.appendChild(thead);
+                var tbody = el('tbody');
+                list.forEach(function (p) {
+                    var tr = el('tr');
+                    var avatarHtml = p.avatar_url
+                        ? '<img src="' + escHtml(p.avatar_url) + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px">'
+                        : '';
+                    var nameTd = el('td');
+                    nameTd.innerHTML = avatarHtml + escHtml(p.username) + '<br><span class="admin-uuid">' + escHtml(p.proxy_id) + '</span>';
+                    tr.appendChild(nameTd);
+                    tr.appendChild(el('td', { text: p.display_name || '' }));
+                    var pairedTd = el('td');
+                    pairedTd.innerHTML = p.paired_user_id
+                        ? '<span class="admin-uuid">' + escHtml(p.paired_user_id) + '</span>'
+                        : '<span style="opacity:.5">Unattached</span>';
+                    tr.appendChild(pairedTd);
+                    var statusTd = el('td');
+                    statusTd.innerHTML = p.active ? badge('Active', 'status-active') : badge('Off', 'status-inactive');
+                    tr.appendChild(statusTd);
+                    var pwTd = el('td');
+                    pwTd.innerHTML = p.has_password ? badge('✓', 'status-active') : badge('', 'status-inactive');
+                    tr.appendChild(pwTd);
+                    var hmacTd = el('td');
+                    hmacTd.innerHTML = p.has_hmac_key
+                        ? badge('✓', 'status-active') + '<span style="font-size:0.7rem;opacity:.6;margin-left:4px;font-family:monospace">' + escHtml(p.hmac_key_fingerprint || '') + '…</span>'
+                        : badge('', 'status-inactive');
+                    tr.appendChild(hmacTd);
+                    var e2eTd = el('td');
+                    e2eTd.innerHTML = p.has_e2e_key ? badge('✓', 'status-active') : badge('', 'status-inactive');
+                    tr.appendChild(e2eTd);
+                    var actTd = el('td', { style: 'white-space:nowrap' });
+
+                    var editBtn = el('button', { class: 'btn btn-small', text: 'Edit' });
+                    editBtn.onclick = (function (proxy) {
+                        return function () { showEditProxyDialog(proxy, section, function () { loadProxyList(); }); };
+                    })(p);
+
+                    var hmacBtn = el('button', { class: 'btn btn-small', text: 'HMAC Key', style: 'margin-left:4px' });
+                    hmacBtn.onclick = (function (proxy) {
+                        return function () { showProxyHmacKeyDialog(proxy, section); };
+                    })(p);
+
+                    var rateLimitBtn = el('button', { class: 'btn btn-small', text: 'Rate Limit', style: 'margin-left:4px' });
+                    rateLimitBtn.onclick = (function (proxy) {
+                        return function () { showProxyRateLimitDialog(proxy, section); };
+                    })(p);
+
+                    var pwBtn = el('button', { class: 'btn btn-small', text: 'Password', style: 'margin-left:4px' });
+                    pwBtn.onclick = (function (proxy) {
+                        return function () { showSetProxyPasswordDialog(proxy.proxy_id, section); };
+                    })(p);
+
+                    var toggleBtn = el('button', { class: 'btn btn-small ' + (p.active ? 'btn-danger' : ''), text: p.active ? 'Disable' : 'Enable', style: 'margin-left:4px' });
+                    toggleBtn.onclick = (function (proxy) {
+                        return function () {
+                            api.patch('/api/admin/proxies/' + proxy.proxy_id, { active: !proxy.active })
+                                .then(function () { loadProxyList(); })
+                                .catch(function (err) { showMsg(section, err.message || 'Failed', 'error'); });
+                        };
+                    })(p);
+
+                    var delBtn = el('button', { class: 'btn btn-small btn-danger', text: 'Delete', style: 'margin-left:4px' });
+                    delBtn.onclick = (function (proxy) {
+                        return function () {
+                            if (!confirm('Delete proxy @' + proxy.username + '? This cannot be undone.')) return;
+                            api.del('/api/admin/proxies/' + proxy.proxy_id)
+                                .then(function () { loadProxyList(); })
+                                .catch(function (err) { showMsg(section, err.message || 'Delete failed', 'error'); });
+                        };
+                    })(p);
+
+                    actTd.appendChild(editBtn);
+                    actTd.appendChild(hmacBtn);
+                    actTd.appendChild(rateLimitBtn);
+                    actTd.appendChild(pwBtn);
+                    actTd.appendChild(toggleBtn);
+                    actTd.appendChild(delBtn);
+                    tr.appendChild(actTd);
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                tableWrap.appendChild(table);
+            }).catch(function (err) {
+                tableWrap.innerHTML = '<div class="error-box">' + escHtml(err.message || 'Failed to load') + '</div>';
+            });
+        }
+
+        loadProxyList();
+    }
+
+    function showCreateProxyDialog(section, onDone) {
+        var overlay = document.getElementById('dialog-overlay');
+        var dialog = document.getElementById('dialog');
+        overlay.style.display = 'flex';
+        dialog.innerHTML =
+            '<h3 style="margin-top:0">Create Proxy Account</h3>' +
+            '<div class="form-group"><label>Username</label>' +
+            '<input id="px-username" class="form-input" placeholder="proxy_bot"></div>' +
+            '<div class="form-group"><label>Pair to User ID <span style="opacity:.5">(optional)</span></label>' +
+            '<input id="px-user-id" class="form-input" placeholder="leave blank for unattached"></div>' +
+            '<div id="px-err" class="error-box" style="display:none"></div>' +
+            '<div class="dialog-actions">' +
+            '<button id="px-cancel" class="btn btn-secondary">Cancel</button>' +
+            '<button id="px-save" class="btn btn-primary">Create</button>' +
+            '</div>';
+        document.getElementById('px-cancel').onclick = function () { overlay.style.display = 'none'; };
+        document.getElementById('px-save').onclick = function () {
+            var username = document.getElementById('px-username').value.trim();
+            if (!username) {
+                document.getElementById('px-err').textContent = 'Username is required.';
+                document.getElementById('px-err').style.display = '';
+                return;
+            }
+            var body = { username: username };
+            var uid = document.getElementById('px-user-id').value.trim();
+            if (uid) body.paired_user_id = uid;
+            api.post('/api/admin/proxies', body)
+                .then(function () { overlay.style.display = 'none'; onDone(); showMsg(section, 'Proxy created.', 'success'); })
+                .catch(function (err) {
+                    document.getElementById('px-err').textContent = err.message || 'Failed';
+                    document.getElementById('px-err').style.display = '';
+                });
+        };
+    }
+
+    function showEditProxyDialog(proxy, section, onDone) {
+        var overlay = document.getElementById('dialog-overlay');
+        var dialog = document.getElementById('dialog');
+        overlay.style.display = 'flex';
+
+        // Build with DOM so we can attach file input events cleanly
+        dialog.innerHTML = '';
+        dialog.appendChild(el('h3', { text: 'Edit Proxy: @' + proxy.username, style: 'margin-top:0' }));
+
+        // Avatar row
+        var avatarRow = el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:14px' });
+        var avatarImg = el('img', { style: 'width:48px;height:48px;border-radius:50%;object-fit:cover;background:var(--t-bg-alt,#222)' });
+        if (proxy.avatar_url) { avatarImg.src = proxy.avatar_url; } else { avatarImg.style.display = 'none'; }
+        var avatarFileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+        var avatarUploadBtn = el('button', { class: 'btn btn-secondary btn-small', text: proxy.avatar_url ? 'Change Avatar' : 'Upload Avatar' });
+        avatarUploadBtn.onclick = function () { avatarFileInput.click(); };
+        avatarFileInput.onchange = function () {
+            var file = avatarFileInput.files[0];
+            if (!file) return;
+            avatarUploadBtn.disabled = true;
+            api.upload('/api/media', file).then(function (media) {
+                return api.patch('/api/admin/proxies/' + proxy.proxy_id, { avatar_media_id: media.media_id });
+            }).then(function (updated) {
+                if (updated && updated.avatar_url) {
+                    avatarImg.src = updated.avatar_url;
+                    avatarImg.style.display = '';
+                    proxy.avatar_url = updated.avatar_url;
+                }
+                avatarUploadBtn.textContent = 'Change Avatar';
+                avatarUploadBtn.disabled = false;
+            }).catch(function (err) {
+                showMsg(section, err.message || 'Upload failed', 'error');
+                avatarUploadBtn.disabled = false;
+            });
+        };
+        avatarRow.appendChild(avatarImg);
+        avatarRow.appendChild(avatarUploadBtn);
+        avatarRow.appendChild(avatarFileInput);
+        dialog.appendChild(avatarRow);
+
+        var dnGroup = el('div', { class: 'form-group' });
+        dnGroup.appendChild(el('label', { text: 'Display Name' }));
+        var dnInput = el('input', { type: 'text', class: 'form-input', id: 'px-display-name', value: proxy.display_name || '' });
+        dnGroup.appendChild(dnInput);
+        dialog.appendChild(dnGroup);
+
+        var bioGroup = el('div', { class: 'form-group' });
+        bioGroup.appendChild(el('label', { text: 'Bio' }));
+        var bioInput = el('textarea', { class: 'form-input', id: 'px-bio', rows: '3' });
+        bioInput.value = proxy.bio || '';
+        bioGroup.appendChild(bioInput);
+        dialog.appendChild(bioGroup);
+
+        var errBox = el('div', { id: 'px-err', class: 'error-box', style: 'display:none' });
+        dialog.appendChild(errBox);
+
+        var actions = el('div', { class: 'dialog-actions' });
+        var cancelBtn = el('button', { class: 'btn btn-secondary', text: 'Cancel' });
+        cancelBtn.onclick = function () { overlay.style.display = 'none'; onDone(); };
+        var saveBtn = el('button', { class: 'btn btn-primary', text: 'Save' });
+        saveBtn.onclick = function () {
+            var body = {
+                display_name: dnInput.value.trim() || null,
+                bio: bioInput.value.trim() || null
+            };
+            api.patch('/api/admin/proxies/' + proxy.proxy_id, body)
+                .then(function () { overlay.style.display = 'none'; onDone(); showMsg(section, 'Proxy updated.', 'success'); })
+                .catch(function (err) { errBox.textContent = err.message || 'Failed'; errBox.style.display = ''; });
+        };
+        actions.appendChild(cancelBtn);
+        actions.appendChild(saveBtn);
+        dialog.appendChild(actions);
+    }
+
+    function showSetProxyPasswordDialog(proxyId, section) {
+        var overlay = document.getElementById('dialog-overlay');
+        var dialog = document.getElementById('dialog');
+        overlay.style.display = 'flex';
+        dialog.innerHTML =
+            '<h3 style="margin-top:0">Set Proxy Password</h3>' +
+            '<div class="form-group"><label>New Password</label>' +
+            '<input id="px-pw" class="form-input" type="password" placeholder="Min 12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...)"></div>' +
+            '<div id="px-err" class="error-box" style="display:none"></div>' +
+            '<div class="dialog-actions">' +
+            '<button id="px-cancel" class="btn btn-secondary">Cancel</button>' +
+            '<button id="px-save" class="btn btn-primary">Set Password</button>' +
+            '</div>';
+        document.getElementById('px-cancel').onclick = function () { overlay.style.display = 'none'; };
+        document.getElementById('px-save').onclick = function () {
+            var pw = document.getElementById('px-pw').value;
+            if (pw.length < 8) {
+                document.getElementById('px-err').textContent = 'Password must be at least 12 characters, Uppercase+Lowercase, 1 number, 1 symbol (?!$...).';
+                document.getElementById('px-err').style.display = '';
+                return;
+            }
+            api.put('/api/admin/proxies/' + proxyId + '/password', { password: pw })
+                .then(function () { overlay.style.display = 'none'; showMsg(section, 'Password set.', 'success'); })
+                .catch(function (err) {
+                    document.getElementById('px-err').textContent = err.message || 'Failed';
+                    document.getElementById('px-err').style.display = '';
+                });
+        };
+    }
+
+    function showProxyHmacKeyDialog(proxy, section) {
+        var overlay = document.getElementById('dialog-overlay');
+        var dialog = document.getElementById('dialog');
+        overlay.style.display = 'flex';
+
+        dialog.innerHTML = '';
+        dialog.appendChild(el('h3', { text: 'HMAC API Key  @' + proxy.username, style: 'margin-top:0' }));
+
+        if (proxy.has_hmac_key) {
+            dialog.appendChild(el('div', {
+                class: 'info-box',
+                style: 'font-family:monospace;margin-bottom:10px',
+                text: 'Current fingerprint: ' + (proxy.hmac_key_fingerprint || '') + '…'
+            }));
+        }
+        dialog.appendChild(el('div', { class: 'pref-desc', style: 'margin-bottom:12px', text: 'Generate a new 32-byte HMAC signing key. Download it before saving  it cannot be retrieved again. The server stores only the key for verification; keep the file secure.' }));
+
+        var pendingKey = null;
+        var keyBox = el('div', { style: 'display:none;font-family:monospace;font-size:0.78rem;word-break:break-all;background:var(--t-bg-alt,#1e1e1e);border:1px solid var(--t-border,#333);border-radius:6px;padding:10px;margin:8px 0;user-select:all' });
+        dialog.appendChild(keyBox);
+
+        var downloadBtn = el('button', { class: 'btn btn-secondary', text: 'Download Key File', style: 'display:none;margin-right:8px' });
+        var saveServerBtn = el('button', { class: 'btn btn-primary', text: 'Save to Server', style: 'display:none;opacity:0.4;pointer-events:none' });
+
+        downloadBtn.onclick = function () {
+            if (!pendingKey) return;
+            downloadText(
+                'proxy-hmac-' + proxy.username + '-' + pendingKey.slice(0, 8) + '.txt',
+                'HMAC Signing Key\n' +
+                'Proxy: @' + proxy.username + '\n' +
+                'Proxy ID: ' + proxy.proxy_id + '\n' +
+                'Key (hex-64): ' + pendingKey + '\n' +
+                'Fingerprint: ' + pendingKey.slice(0, 8) + '\n\n' +
+                'Keep this file secure and private. Anyone with this key can sign requests as this proxy.'
+            );
+            saveServerBtn.style.opacity = '';
+            saveServerBtn.style.pointerEvents = '';
+        };
+
+        saveServerBtn.onclick = function () {
+            if (!pendingKey) return;
+            saveServerBtn.disabled = true;
+            api.put('/api/admin/proxies/' + proxy.proxy_id + '/hmac-key', { hmac_key: pendingKey })
+                .then(function () {
+                    overlay.style.display = 'none';
+                    showMsg(section, 'HMAC key saved. Fingerprint: ' + pendingKey.slice(0, 8) + '…', 'success');
+                })
+                .catch(function (err) {
+                    showMsg(section, err.message || 'Failed to save key', 'error');
+                    saveServerBtn.disabled = false;
+                });
+        };
+
+        var genBtn = el('button', { class: 'btn ' + (proxy.has_hmac_key ? 'btn-secondary' : 'btn-primary'), text: proxy.has_hmac_key ? 'Regenerate Key' : 'Generate Key' });
+        genBtn.onclick = function () {
+            pendingKey = generateHmacKey();
+            keyBox.textContent = pendingKey;
+            keyBox.style.display = '';
+            downloadBtn.style.display = '';
+            saveServerBtn.style.display = '';
+            saveServerBtn.style.opacity = '0.4';
+            saveServerBtn.style.pointerEvents = 'none';
+        };
+        dialog.appendChild(genBtn);
+        dialog.appendChild(downloadBtn);
+        dialog.appendChild(saveServerBtn);
+
+        var cancelBtn = el('button', { class: 'btn btn-secondary', text: 'Close', style: 'margin-top:14px;display:block' });
+        cancelBtn.onclick = function () { overlay.style.display = 'none'; };
+        dialog.appendChild(cancelBtn);
+    }
+
+    function showProxyRateLimitDialog(proxy, section) {
+        var overlay = document.getElementById('dialog-overlay');
+        var dialog = document.getElementById('dialog');
+        overlay.style.display = 'flex';
+        dialog.innerHTML = '';
+        dialog.appendChild(el('h3', { text: 'Rate Limit Override: @' + proxy.username, style: 'margin-top:0' }));
+        dialog.appendChild(el('div', { class: 'pref-desc', style: 'margin-bottom:14px', text: 'Set per-proxy upload rate limits. Leave blank to use the server defaults. The effective limit is always the lower of the per-proxy override and the server default.' }));
+
+        var errBox = el('div', { class: 'error-box', style: 'display:none;margin-bottom:8px' });
+        dialog.appendChild(errBox);
+
+        var piecesGroup = el('div', { class: 'form-group' });
+        piecesGroup.appendChild(el('label', { text: 'Max uploads/minute (blank = server default)' }));
+        var piecesInput = el('input', { type: 'number', class: 'form-input', id: 'px-rl-pieces', min: '1', placeholder: 'Server default' });
+        piecesGroup.appendChild(piecesInput);
+        dialog.appendChild(piecesGroup);
+
+        var bytesGroup = el('div', { class: 'form-group' });
+        bytesGroup.appendChild(el('label', { text: 'Max MB/minute (blank = server default)' }));
+        var bytesInput = el('input', { type: 'number', class: 'form-input', id: 'px-rl-bytes', min: '1', placeholder: 'Server default' });
+        bytesGroup.appendChild(bytesInput);
+        dialog.appendChild(bytesGroup);
+
+        // Load existing override
+        api.get('/api/admin/proxies/' + proxy.proxy_id + '/rate-limit').then(function (rl) {
+            if (rl.max_pieces_per_minute != null) piecesInput.value = rl.max_pieces_per_minute;
+            if (rl.max_bytes_per_minute != null) bytesInput.value = Math.round(rl.max_bytes_per_minute / 1048576);
+        }).catch(function () { /* non-fatal, just leave blank */ });
+
+        var actions = el('div', { class: 'dialog-actions' });
+        var cancelBtn = el('button', { class: 'btn btn-secondary', text: 'Cancel' });
+        cancelBtn.onclick = function () { overlay.style.display = 'none'; };
+        var saveBtn = el('button', { class: 'btn btn-primary', text: 'Save' });
+        saveBtn.onclick = function () {
+            var pieces = piecesInput.value.trim();
+            var bytes = bytesInput.value.trim();
+            var body = {
+                max_pieces_per_minute: pieces ? (parseInt(pieces, 10) || null) : null,
+                max_bytes_per_minute: bytes ? ((parseInt(bytes, 10) || null) * 1048576) : null
+            };
+            api.put('/api/admin/proxies/' + proxy.proxy_id + '/rate-limit', body)
+                .then(function () {
+                    overlay.style.display = 'none';
+                    showMsg(section, 'Rate limit saved.', 'success');
+                })
+                .catch(function (err) {
+                    errBox.textContent = err.message || 'Failed to save';
+                    errBox.style.display = '';
+                });
+        };
+        actions.appendChild(cancelBtn);
+        actions.appendChild(saveBtn);
+        dialog.appendChild(actions);
+    }
+
     return {
         renderUsers: renderUsers,
         renderInvites: renderInvites,
@@ -1430,6 +1922,7 @@ var admin = (function () {
         renderEmailSettings: renderEmailSettings,
         renderTheme: renderTheme,
         renderStunServers: renderStunServers,
-        renderFederation: renderFederation
+        renderFederation: renderFederation,
+        renderProxies: renderProxies
     };
 })();

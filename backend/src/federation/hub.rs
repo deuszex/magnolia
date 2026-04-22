@@ -37,7 +37,7 @@ use super::{
     client as s2s_client_mod,
     identity::{ServerIdentity, load_shared_secret},
     messaging,
-    models::{FederatedPostEntry, FederatedMediaRef, S2SRequestMeta},
+    models::{FederatedPostEntry, S2SRequestMeta},
     repo,
     signing::{sign_request, verify_request},
 };
@@ -384,7 +384,7 @@ async fn outbound_task(
     info!("hub: starting outbound task for {} ({})", conn_id, ws_url);
 
     loop {
-        // Re-read the current address from DB on each attempt — the address may
+        // Re-read the current address from DB on each attempt, the address may
         // have been updated since this task was spawned (e.g. peer IP/domain change).
         match repo::get_connection_by_id(&pool, &conn_id).await {
             Ok(Some(conn)) if conn.address != peer_address => {
@@ -404,7 +404,7 @@ async fn outbound_task(
                 .await;
             }
             Ok(None) => {
-                // Connection was deleted — stop this task.
+                // Connection was deleted, probably intentionally, stop this task.
                 info!(
                     "hub: connection {} no longer exists, stopping outbound task",
                     conn_id
@@ -540,7 +540,10 @@ async fn try_connect_and_run(
             pool.clone(),
             Arc::clone(hub_settings),
             Arc::clone(hub_identity),
-            HUB_S2S_CLIENT.get().cloned().unwrap_or_else(s2s_client_mod::build_client),
+            HUB_S2S_CLIENT
+                .get()
+                .cloned()
+                .unwrap_or_else(s2s_client_mod::build_client),
             conn_id.to_string(),
             peer_address.to_string(),
         ));
@@ -664,7 +667,7 @@ pub async fn handle_peer_ws(
                     return;
                 }
                 Ok(None) => {
-                    // Address lookup failed — the peer may be calling from a different
+                    // Address lookup failed, the peer may be calling from a different
                     // address (VPN, IP change). Scan all active connections by key.
                     match repo::list_active_connections(&pool).await {
                         Ok(all) => {
@@ -749,12 +752,15 @@ pub async fn handle_peer_ws(
             hello_address.clone(),
         );
 
-        // Also drain pending messages — the outbound task may not fire immediately.
+        // Also drain pending messages, the outbound task may not fire immediately. Want to avoid double send.
         tokio::spawn(messaging::drain_pending_for_peer(
             pool.clone(),
             Arc::clone(&settings),
             Arc::clone(&identity),
-            HUB_S2S_CLIENT.get().cloned().unwrap_or_else(s2s_client_mod::build_client),
+            HUB_S2S_CLIENT
+                .get()
+                .cloned()
+                .unwrap_or_else(s2s_client_mod::build_client),
             conn.id.clone(),
             hello_address.clone(),
         ));
@@ -780,7 +786,11 @@ pub async fn handle_peer_ws(
 /// Create local media stubs for any `media_ref` items in a federated post's contents,
 /// rewriting `media_ref.media_id` and `content` to local IDs so the feed handler can
 /// serve them without knowing the originating server's media IDs.
-async fn create_post_media_stubs(pool: &AnyPool, entry: &mut FederatedPostEntry, peer_address: &str) {
+async fn create_post_media_stubs(
+    pool: &AnyPool,
+    entry: &mut FederatedPostEntry,
+    peer_address: &str,
+) {
     let media_repo = MediaRepository::new(pool.clone());
     let now_str = Utc::now().to_rfc3339();
     for c in &mut entry.contents {
@@ -931,9 +941,10 @@ async fn route_call_signal_to_local_members(
     if let Some(reg) = crate::handlers::ws::global_user_registry() {
         for row in rows {
             let uid: String = row.get("user_id");
-            if uid != "__fed__" {
-                crate::handlers::ws::send_to_user(reg, &uid, &msg).await;
+            if uid == "__fed__" {
+                continue;
             }
+            crate::handlers::ws::send_to_user(reg, &uid, &msg).await;
         }
     }
 }

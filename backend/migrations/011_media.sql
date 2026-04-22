@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS media (
     -- is_fetching: 1 = a fetch is in progress, prevents duplicate concurrent fetches
     origin_server TEXT,
     origin_media_id TEXT,
+    proxy_owner_id TEXT REFERENCES proxy_accounts(proxy_id) ON DELETE SET NULL,
     is_cached INTEGER NOT NULL DEFAULT 1,
     is_fetching INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,

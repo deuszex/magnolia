@@ -1,6 +1,20 @@
 # Magnolia
 Anti-Social Media Server
 
+# Quick: What even is this project?
+![Main view](doc/img/main_screen.bmp)
+
+Short version is, a personal communication platform for small groups of people, be it family, friends, organization, or company.
+Easy to setup, and servers can connect to each other, so two users installing their own on their machines is perfectly viable.
+Secure and encrypted messaging, voice and video-calls (screen-sharing included) are available, as is file-transfer.
+
+[User documentation](doc/user_web_interface_guide.md)
+
+[Admin documentation](doc/admin_web_interface_guide.md)
+
+[Client (and proxy) documentation](client/README.md)
+
+# Long version
 ## Purpose
 The aim is to return the ownership of people's time, data, and privacy to themselves from corporations.
 There is absolutely no need for anyone to see promotions of items and services they don't have use for in their lives, from companies on the other end of the planet.
@@ -46,6 +60,9 @@ Two connecting servers, internally labeled as federation, allows the users of ea
 like SMTP, federation, default color scheme, users, registration, etc.
 - While your server is offline, the messages sent from other servers are not lost, and when reestablishing connection everyone receives the messages they missed while their server was offline.
 - Passphrase protected message encryption key. Key stored on the server, but encrypted, so you can login from anywhere to view your messages, but only if you remember the passphrase. This also means that if someone logs into your account, they cannot read your messages unless they know your passphrase.
+- Reset passwords without emails, using a key file, that you can create when logged in. (Needs to be turned on by admin.)
+- Proxy account system for separated automation (bots).
+- Session management
 
 ## Proposed/imagined server/user flow
 1. Server installed by user or someone known to them.
@@ -61,7 +78,7 @@ like SMTP, federation, default color scheme, users, registration, etc.
 
 ## How to start (READ BEFORE YOU START)
 (assuming Linux system, Windows works similarly but currently doesn't have automatic nginx configuration, macos was done completely on theory)
-~~1. a) Download server installer binary of your choice (currently Windows and Linux(.deb for debian, .rpm for fedora))~~
+1. a) Download server installer binary of your choice (currently Windows and Linux(.deb for debian, .rpm for fedora))
 1. b) Download source code to build for your system (There is a macos build script setup, but I have no compatible hardware so cannot test, best of luck).
 2. Install on your system (it should get most of environment values from you in the process).
 2. Addendum (IMPORTANT), during setup you will be prompted to include an admin account, if this doesn't happen or fails, the website should start in setup mode, meaning the first to connect gets to create an admin account through the web interface. If even this fails, there is a binary in the project that allows for inserting an admin user straight into the database.
@@ -104,12 +121,18 @@ Environment variable `DATABASE_URL` dictates which one is used, and where it can
 - `TRUSTED_PROXY` sets a trusted proxy for the rate-limiters.
 - `ENV` if the value is `development`, sets login cookie security header to false (true in all other cases).
 
-### TURN
+### ~~--~~ TURN ~~--~~ (currently missing, will have to build out a whole project for it)
 - `TURN_ENABLED` value `true` to turn on.
 - `TURN_LISTEN_ADDR` is your `address:port` where you want to run your TURN server (default value if not given: `0.0.0.0:3478`).
 - `TURN_REALM` the shared realm/topic TURN connections are looking for, default value `magnolia`.
 - `SESSION_SECRET` used for TURN (it's for a specific type of connection that can be enabled for calls).
 - `TURN_EXTERNAL_IP` is (as per name) the ip address where the TURN server can be reached from external sources.
+
+As said in title, the issue here is that the two major rust projects for turn are less than ideal.
+[Turn-rs](https://github.com/mycrl/turn-rs#building) choose not to publish the lib and is primarily a binary product.
+While the (I assume) google maintained alternative is... Pushed multiple times, each times slightly different, and none of them have any tangible documentation on what's googling on. Or not sure, I'm honestly confused by the situation, so here are some links to them [rtc-turn](https://crates.io/crates/rtc-turn) ["turn"](https://docs.rs/turn/0.17.1/turn/) [webrtc-turn](https://crates.io/crates/webrtc-turn)
+
+On account of the above, I'll probably have to create/fork-and-fix a turn library. Until then, STUN it is.
 
 ### Logging variables
 - `LOG_FORMAT` value `pretty` causes output to be "pretty", meaning contents are separated by spaces and new lines. All other values cause json-blob.
@@ -140,14 +163,12 @@ Documentation to help connect bots (yeah I know... but this is a pretty standard
 #### Frontend needs real-time update.
 Some elements like incoming federation requests sometimes only update when refreshing. Needs further testing to find bottlenecks.
 
+#### Calendar (public/shared/private)
+
 ### Known limitations/bugs
-- Federated servers are currently not sharing media files between eachother, whether in messages or posts.
-- If a new server is federated, users have to press the "save" button on their federation settings page, before the newly federated server sees them.
-- Servers are currently communicating mostly with POST requests instead of the established web-socket channel. Both are encrypted, it's just a work-in-progress feature.
+- Servers between each other are currently communicating mostly with POST requests instead of the established web-socket channel. Both are encrypted, it's just a work-in-progress feature.
 - When the server was offline and you receive an image/video/file, it is loaded when your server reestablishes connection. If you are logged in in the meantime, you might need to refresh the page for the file to load into the frontend. It will still be visible that there is an attachment, but for for example a video, it will not display even a thumbnail.
 - Groups calls between servers can be problematic. Haven't figured out the source of it yet.
-- (IMPORTANT) Password reset is not in yet. Not sure how to do it in case no SMTP/email is setup.
-- (IMPORTANT) Windows installer is not happy with itself. Firewall "persistence" because the server starts with the system, and if you try to add it to the firewall exceptions, it fails again for "defense avoidance". Yet all of the telemetry in the system is okay to start anytime... Also permissions issues, and cannot do anything if installed. The server binary if you put it into a folder and just start it, runs perfectly, but if you try to be friendly and all, fails on mmultiple levels.
 
 ## Testing
 Setting up two separate servers (with their own databases, and on separate ports) works, with the caveat that when you are trying voice and/or video calls, and you have one of the servers on localhost (127.0.0.1) and the other on the public net (0.0.0.0) (for example because you want to test mobile login into your server) it will only work if your localhost server is calling the public address; while the other way around will not connect in the browser.
@@ -159,14 +180,15 @@ HOST=127.0.0.1 PORT=3000 BASE_URL=http://127.0.0.1:3000/ DATABASE_URL=sqlite:./m
 ```
 
 ### Building server from source
+
 Pretty much the same as the command just above.
 You'll need `rustc`, try `cargo`. I'm as of now running on rustc 1.92.0.
 
 Take a look at: [Rust](https://rust-lang.org/)
 
 ### Building installer from source
-Look inside the installer folder, you will find... more folders. Select your target platform.
 
+Look inside the installer folder, you will find... more folders. Select your target platform.
 #### From windows to windows
 you'll need inno.
 

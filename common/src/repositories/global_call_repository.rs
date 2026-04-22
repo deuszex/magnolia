@@ -12,7 +12,7 @@ impl GlobalCallRepository {
         Self { pool }
     }
 
-    /// List all current participants (joined_at ascending — oldest first).
+    /// List all current participants (joined_at ascending, oldest first).
     pub async fn list_participants(&self) -> Result<Vec<GlobalCallParticipant>, sqlx::Error> {
         sqlx::query_as::<_, GlobalCallParticipant>(
             "SELECT user_id, joined_at FROM global_call_participants ORDER BY joined_at ASC",

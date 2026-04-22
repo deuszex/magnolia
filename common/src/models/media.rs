@@ -75,6 +75,8 @@ pub struct Media {
     pub is_fetching: i32,
     pub created_at: String,
     pub updated_at: String,
+    /// Set when a proxy account owns this media; `owner_id` holds `__proxy__` sentinel.
+    pub proxy_owner_id: Option<String>,
 }
 
 /// Media summary for gallery listing

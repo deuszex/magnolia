@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 /// Admin response for a single STUN/TURN server entry.
-/// Credential is intentionally omitted — write-only once set.
+/// Credential is intentionally omitted, so that the frontend doen't leak credentials. Write-only once set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StunServerResponse {
     pub id: String,
@@ -39,7 +39,9 @@ pub struct UpdateStunServerRequest {
     pub enabled: Option<bool>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Request to initiate a call
 #[derive(Debug, Serialize, Deserialize)]

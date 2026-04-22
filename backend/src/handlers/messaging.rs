@@ -12,10 +12,13 @@ use validator::Validate;
 
 use crate::config::Settings;
 use crate::federation::repo as fed_repo;
+use crate::handlers::ws::{ConnectionRegistry, send_to_user};
 use crate::middleware::auth::AuthMiddleware;
+use crate::utils::encryption::{decrypt_text, encrypt_text};
 use magnolia_common::errors::AppError;
 use magnolia_common::models::{Conversation, ConversationMember, Message, UserBlock};
 use magnolia_common::repositories::MediaRepository;
+use magnolia_common::repositories::ProxyUserRepository;
 use magnolia_common::repositories::{
     ConversationBackgroundRepository, ConversationFavouriteRepository, ConversationRepository,
     MessageRepository, MessagingRepository, UserRepository,
@@ -223,21 +226,30 @@ pub async fn create_conversation(
         let conn = fed_repo::get_connection_by_id(&pool, sc_id)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to look up connection: {}", e)))?;
-        let conn = conn.ok_or_else(|| AppError::NotFound(format!("Server connection {} not found", sc_id)))?;
+        let conn = conn
+            .ok_or_else(|| AppError::NotFound(format!("Server connection {} not found", sc_id)))?;
         if conn.status != "active" {
             return Err(AppError::BadRequest(format!(
-                "Server connection {} is not active", sc_id
+                "Server connection {} is not active",
+                sc_id
             )));
         }
         let fed_user = fed_repo::get_federation_user(&pool, sc_id, ru_id)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to look up federated user: {}", e)))?;
-        let fed_user = fed_user.ok_or_else(|| AppError::NotFound(format!("Federated user {}:{} not found", sc_id, ru_id)))?;
-        let host = conn.address
+        let fed_user = fed_user.ok_or_else(|| {
+            AppError::NotFound(format!("Federated user {}:{} not found", sc_id, ru_id))
+        })?;
+        let host = conn
+            .address
             .trim_start_matches("https://")
             .trim_start_matches("http://")
             .trim_end_matches('/');
-        let ident = if fed_user.username.is_empty() { ru_id.to_string() } else { fed_user.username.clone() };
+        let ident = if fed_user.username.is_empty() {
+            ru_id.to_string()
+        } else {
+            fed_user.username.clone()
+        };
         let qualified_id = format!("{}@{}", ident, host);
         fed_members.push((sc_id.to_string(), ru_id.to_string(), qualified_id));
     }
@@ -248,26 +260,41 @@ pub async fn create_conversation(
             if let Some(existing) = conv_repo
                 .find_direct(&auth.user.user_id, local_ids[0])
                 .await
-                .map_err(|e| AppError::Internal(format!("Failed to check existing conversation: {}", e)))?
+                .map_err(|e| {
+                    AppError::Internal(format!("Failed to check existing conversation: {}", e))
+                })?
             {
                 let members = conv_repo
                     .list_members(&existing.conversation_id)
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to list members: {}", e)))?;
-                return Ok((StatusCode::OK, Json(build_conversation_response(existing, members))));
+                return Ok((
+                    StatusCode::OK,
+                    Json(build_conversation_response(&pool, existing, members).await),
+                ));
             }
         } else if fed_members.len() == 1 {
             let (sc_id, ru_id, _) = &fed_members[0];
-            if let Some(existing_id) = fed_repo::find_federated_dm(&pool, &auth.user.user_id, sc_id, ru_id)
-                .await
-                .map_err(|e| AppError::Internal(format!("Failed to check existing DM: {}", e)))?
+            if let Some(existing_id) =
+                fed_repo::find_federated_dm(&pool, &auth.user.user_id, sc_id, ru_id)
+                    .await
+                    .map_err(|e| {
+                        AppError::Internal(format!("Failed to check existing DM: {}", e))
+                    })?
             {
-                let conv = conv_repo.get_by_id(&existing_id).await
+                let conv = conv_repo
+                    .get_by_id(&existing_id)
+                    .await
                     .map_err(|e| AppError::Internal(format!("Failed to get conversation: {}", e)))?
                     .ok_or_else(|| AppError::Internal("Conversation not found".to_string()))?;
-                let members = conv_repo.list_members(&existing_id).await
+                let members = conv_repo
+                    .list_members(&existing_id)
+                    .await
                     .map_err(|e| AppError::Internal(format!("Failed to list members: {}", e)))?;
-                return Ok((StatusCode::OK, Json(build_conversation_response(conv, members))));
+                return Ok((
+                    StatusCode::OK,
+                    Json(build_conversation_response(&pool, conv, members).await),
+                ));
             }
         }
     }
@@ -282,6 +309,7 @@ pub async fn create_conversation(
         created_by: auth.user.user_id.clone(),
         created_at: now.clone(),
         updated_at: now.clone(),
+        proxy_creator_id: None,
     };
 
     conv_repo
@@ -290,13 +318,18 @@ pub async fn create_conversation(
         .map_err(|e| AppError::Internal(format!("Failed to create conversation: {}", e)))?;
 
     // Add creator as owner.
-    let creator_role = if conv_type == "group" { "owner" } else { "member" };
+    let creator_role = if conv_type == "group" {
+        "owner"
+    } else {
+        "member"
+    };
     let creator_member = ConversationMember {
         id: Uuid::new_v4().to_string(),
         conversation_id: conversation_id.clone(),
         user_id: auth.user.user_id.clone(),
         role: creator_role.to_string(),
         joined_at: now.clone(),
+        proxy_user_id: None,
     };
     conv_repo
         .add_member(&creator_member)
@@ -312,6 +345,7 @@ pub async fn create_conversation(
             user_id: member_id.to_string(),
             role: "member".to_string(),
             joined_at: now.clone(),
+            proxy_user_id: None,
         };
         conv_repo
             .add_member(&member)
@@ -329,7 +363,7 @@ pub async fn create_conversation(
 
     Ok((
         StatusCode::CREATED,
-        Json(build_conversation_response(conversation, all_members)),
+        Json(build_conversation_response(&pool, conversation, all_members).await),
     ))
 }
 
@@ -367,7 +401,7 @@ pub async fn list_conversations(
         let is_favourite = fav_ids.contains(&r.conversation_id);
 
         // For DMs without a name, resolve the other party's display name.
-        // For federated DMs the other party is a remote user — look up via federated_conversation_members.
+        // For federated DMs the other party is a remote user, look up via federated_conversation_members.
         let display_name = if r.conversation_type == "direct" && r.name.is_none() {
             let members = conv_repo
                 .list_members(&r.conversation_id)
@@ -384,7 +418,7 @@ pub async fn list_conversations(
                     .flatten()
                     .map(|u| u.display_name.unwrap_or(u.username))
             } else {
-                // No local other-party — check for a federated member.
+                // No local other-party, check for a federated member.
                 crate::federation::repo::get_federated_dm_display_name(&pool, &r.conversation_id)
                     .await
                     .unwrap_or(None)
@@ -414,7 +448,7 @@ pub async fn get_conversation(
     axum::Extension(auth): axum::Extension<AuthMiddleware>,
     Path(id): Path<String>,
 ) -> Result<Json<ConversationResponse>, AppError> {
-    let conv_repo = ConversationRepository::new(pool);
+    let conv_repo = ConversationRepository::new(pool.clone());
 
     // Must be a member
     if !conv_repo
@@ -436,7 +470,9 @@ pub async fn get_conversation(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to list members: {}", e)))?;
 
-    Ok(Json(build_conversation_response(conv, members)))
+    Ok(Json(
+        build_conversation_response(&pool, conv, members).await,
+    ))
 }
 
 /// PUT /api/conversations/:id
@@ -560,21 +596,29 @@ pub async fn add_member(
         let conn = fed_repo::get_connection_by_id(&pool, sc_id)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to look up connection: {}", e)))?;
-        let conn = conn.ok_or_else(|| AppError::NotFound(format!("Server connection {} not found", sc_id)))?;
+        let conn = conn
+            .ok_or_else(|| AppError::NotFound(format!("Server connection {} not found", sc_id)))?;
         if conn.status != "active" {
             return Err(AppError::BadRequest(format!(
-                "Server connection {} is not active", sc_id
+                "Server connection {} is not active",
+                sc_id
             )));
         }
         let fed_user = fed_repo::get_federation_user(&pool, sc_id, ru_id)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to look up federated user: {}", e)))?;
-        let fed_user = fed_user.ok_or_else(|| AppError::NotFound("Federated user not found".to_string()))?;
-        let host = conn.address
+        let fed_user =
+            fed_user.ok_or_else(|| AppError::NotFound("Federated user not found".to_string()))?;
+        let host = conn
+            .address
             .trim_start_matches("https://")
             .trim_start_matches("http://")
             .trim_end_matches('/');
-        let ident = if fed_user.username.is_empty() { ru_id.to_string() } else { fed_user.username.clone() };
+        let ident = if fed_user.username.is_empty() {
+            ru_id.to_string()
+        } else {
+            fed_user.username.clone()
+        };
         let qualified_id = format!("{}@{}", ident, host);
 
         fed_repo::add_federated_member(&pool, &id, sc_id, ru_id, &qualified_id)
@@ -587,6 +631,9 @@ pub async fn add_member(
                 user_id: payload.user_id.clone(),
                 role: "member".to_string(),
                 joined_at: now,
+                is_proxy: false,
+                display_name: None,
+                username: None,
             }),
         ));
     }
@@ -620,6 +667,7 @@ pub async fn add_member(
         user_id: payload.user_id.clone(),
         role: "member".to_string(),
         joined_at: now.clone(),
+        proxy_user_id: None,
     };
 
     conv_repo
@@ -633,6 +681,9 @@ pub async fn add_member(
             user_id: member.user_id,
             role: member.role,
             joined_at: member.joined_at,
+            is_proxy: false,
+            display_name: None,
+            username: None,
         }),
     ))
 }
@@ -682,6 +733,7 @@ pub async fn send_message(
         std::sync::Arc<crate::federation::identity::ServerIdentity>,
     >,
     axum::Extension(s2s_client): axum::Extension<crate::federation::client::S2SClient>,
+    axum::Extension(registry): axum::Extension<ConnectionRegistry>,
     Path(id): Path<String>,
     Json(payload): Json<SendMessageRequest>,
 ) -> Result<(StatusCode, Json<ChatMessageResponse>), AppError> {
@@ -725,14 +777,19 @@ pub async fn send_message(
     let now = Utc::now().to_rfc3339();
     let message_id = Uuid::new_v4().to_string();
 
+    let (stored_content, content_nonce) =
+        encrypt_text(&settings, &pool, &payload.encrypted_content).await?;
+
     let message = Message {
         message_id: message_id.clone(),
         conversation_id: id.clone(),
         sender_id: auth.user.user_id.clone(),
         remote_sender_qualified_id: None,
-        encrypted_content: payload.encrypted_content.clone(),
+        proxy_sender_id: None,
+        encrypted_content: stored_content,
         created_at: now.clone(),
         federated_status: None,
+        content_nonce,
     };
 
     msg_repo
@@ -752,6 +809,35 @@ pub async fn send_message(
             .create_deliveries(&message_id, &recipient_ids)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to create deliveries: {}", e)))?;
+    }
+
+    // Push WS notification to all local recipients
+    if !recipient_ids.is_empty() {
+        let sender_avatar = auth
+            .user
+            .avatar_media_id
+            .as_ref()
+            .map(|mid| format!("/api/media/{}/thumbnail", mid));
+        let ws_msg = serde_json::json!({
+            "type": "new_message",
+            "conversation_id": id,
+            "message": {
+                "message_id": message_id,
+                "conversation_id": id,
+                "sender_id": auth.user.user_id,
+                "sender_email": auth.user.email,
+                "sender_name": auth.user.display_name,
+                "sender_avatar_url": sender_avatar,
+                "encrypted_content": payload.encrypted_content,
+                "attachments": [],
+                "created_at": now,
+                "federated_status": null,
+            }
+        });
+        let ws_str = ws_msg.to_string();
+        for uid in &recipient_ids {
+            send_to_user(&registry, uid, &ws_str).await;
+        }
     }
 
     // Forward to any federated members of this conversation.
@@ -781,8 +867,18 @@ pub async fn send_message(
         let conv_type = conv.conversation_type.clone();
         let conv_name = conv.name.clone();
         tokio::spawn(crate::federation::messaging::forward_message_to_peers(
-            pool_c, settings_c, identity, s2s_client, conv_id, conv_type, conv_name,
-            message_id.clone(), content, sender_id, sent_at, fed_attachments,
+            pool_c,
+            settings_c,
+            identity,
+            s2s_client,
+            conv_id,
+            conv_type,
+            conv_name,
+            message_id.clone(),
+            content,
+            sender_id,
+            sent_at,
+            fed_attachments,
         ));
     }
 
@@ -843,7 +939,7 @@ pub async fn send_message(
 
 /// GET /api/conversations/:id/messages
 pub async fn list_messages(
-    State((pool, _settings)): State<AppState>,
+    State((pool, settings)): State<AppState>,
     axum::Extension(auth): axum::Extension<AuthMiddleware>,
     Path(id): Path<String>,
     Query(query): Query<MessageListQuery>,
@@ -879,6 +975,9 @@ pub async fn list_messages(
     > = std::collections::HashMap::new();
     for m in &messages {
         if m.sender_id == "__fed__" {
+            continue;
+        }
+        if m.sender_id == "__proxy__" {
             continue;
         }
         if !sender_info.contains_key(&m.sender_id) {
@@ -920,6 +1019,7 @@ pub async fn list_messages(
         } else {
             Default::default()
         };
+        let plaintext = decrypt_text(&settings, &m.encrypted_content, &m.content_nonce)?;
         result_messages.push(ChatMessageResponse {
             message_id: m.message_id,
             conversation_id: m.conversation_id,
@@ -928,7 +1028,7 @@ pub async fn list_messages(
             sender_name: name,
             sender_avatar_url: avatar,
             remote_sender_qualified_id: m.remote_sender_qualified_id,
-            encrypted_content: m.encrypted_content,
+            encrypted_content: plaintext,
             attachments,
             created_at: m.created_at,
             federated_status: m.federated_status,
@@ -1162,16 +1262,62 @@ pub async fn delete_background(
 
 // Helpers
 
-fn build_conversation_response(
+async fn build_conversation_response(
+    pool: &AnyPool,
     conv: Conversation,
     members: Vec<ConversationMember>,
 ) -> ConversationResponse {
+    let member_ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
+
+    let proxy_repo = ProxyUserRepository::new(pool.clone());
+    let proxy_ids = proxy_repo
+        .filter_proxy_ids(&member_ids)
+        .await
+        .unwrap_or_default();
+
+    // Batch-fetch display names: proxies from proxy_accounts, users from user_accounts
+    let mut name_map: std::collections::HashMap<String, (Option<String>, String)> =
+        std::collections::HashMap::new();
+
+    if let Ok(proxies) = proxy_repo.list_active().await {
+        for p in proxies {
+            if proxy_ids.contains(&p.proxy_id) {
+                name_map.insert(p.proxy_id, (p.display_name, p.username));
+            }
+        }
+    }
+
+    let user_ids: Vec<String> = member_ids
+        .iter()
+        .filter(|id| !proxy_ids.contains(*id))
+        .cloned()
+        .collect();
+
+    if !user_ids.is_empty() {
+        let user_repo = UserRepository::new(pool.clone());
+        for uid in &user_ids {
+            if let Ok(Some(u)) = user_repo.find_by_id(uid).await {
+                name_map.insert(uid.clone(), (u.display_name, u.username));
+            }
+        }
+    }
+
     let member_infos = members
         .into_iter()
-        .map(|m| MemberInfo {
-            user_id: m.user_id,
-            role: m.role,
-            joined_at: m.joined_at,
+        .map(|m| {
+            let is_proxy = proxy_ids.contains(&m.user_id);
+            let (display_name, username) = name_map
+                .get(&m.user_id)
+                .map(|(d, u)| (d.clone(), Some(u.clone())))
+                .unwrap_or((None, None));
+            MemberInfo {
+                user_id: m.user_id,
+                role: m.role,
+                joined_at: m.joined_at,
+                is_proxy,
+                display_name,
+                username,
+            }
         })
         .collect();
 

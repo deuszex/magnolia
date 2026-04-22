@@ -63,7 +63,7 @@ var app = (function () {
         document.getElementById('app-auth').style.display = 'none';
         document.getElementById('app-main').style.display = '';
 
-        // All app scripts loaded dynamically after auth — never served to unauthenticated users.
+        // All app scripts loaded dynamically after auth, never served to unauthenticated users.
         var appScripts = [
             '/js/theme.js',
             '/js/e2e.js',
@@ -75,10 +75,12 @@ var app = (function () {
             '/js/global-call.js',
             '/js/profile.js',
             '/js/directory.js',
-            '/js/events.js'
+            '/js/events.js',
+            '/js/security.js',
+            '/js/proxy.js'
         ];
 
-        // Admin module only for admin users — never exposed to regular users.
+        // Admin module only for admin users, never exposed to regular users.
         if (state.currentUser && state.currentUser.admin) {
             appScripts.push('/js/admin.js');
         }
@@ -256,7 +258,6 @@ var app = (function () {
 
         // Load sidebars
         messaging.loadSidebar();
-        messaging.startSidebarPolling();
         messaging.initUsersSidebar();
         messaging.loadUsers();
     }
@@ -376,7 +377,7 @@ var app = (function () {
             }
         }
 
-        // Invite/register route: #register/TOKEN — already registered users land here
+        // Invite/register route: #register/TOKEN, already registered users land here
         // when testing an invite link. Show a notice rather than the feed.
         if (hash.indexOf('register/') === 0) {
             if (feedArea) {
@@ -403,6 +404,7 @@ var app = (function () {
                     case 'theme': admin.renderTheme(feedArea); break;
                     case 'stun': admin.renderStunServers(feedArea); break;
                     case 'federation': admin.renderFederation(feedArea); break;
+                    case 'proxies': admin.renderProxies(feedArea); break;
                     default: admin.renderUsers(feedArea); break;
                 }
             }
@@ -437,6 +439,22 @@ var app = (function () {
         if (hash === 'theme') {
             if (typeof theme !== 'undefined') {
                 theme.renderUserTheme(feedArea);
+            }
+            return;
+        }
+
+        // Account security settings: #security
+        if (hash === 'security') {
+            if (typeof security !== 'undefined') {
+                security.renderPage(feedArea);
+            }
+            return;
+        }
+
+        // Proxy account management: #proxy
+        if (hash === 'proxy') {
+            if (typeof proxyPage !== 'undefined') {
+                proxyPage.renderPage(feedArea);
             }
             return;
         }

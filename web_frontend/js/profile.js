@@ -77,6 +77,35 @@ var profile = (function () {
                     renderEditProfileForm(prof);
                 };
             }
+
+            // Append posts section
+            var profilePage = feedArea.querySelector('.profile-page');
+            if (profilePage) {
+                var postsSection = document.createElement('div');
+                postsSection.className = 'profile-posts-section';
+                postsSection.innerHTML = '<h3 class="profile-posts-title">Posts</h3><div class="profile-posts-list"><div class="loading-indicator">Loading posts\u2026</div></div>';
+                profilePage.appendChild(postsSection);
+
+                var postsList = postsSection.querySelector('.profile-posts-list');
+                try {
+                    var postsUrl = '/api/posts?author_id=' + encodeURIComponent(prof.user_id) + '&limit=20';
+                    if (isOwn) postsUrl += '&include_drafts=true';
+                    var postsData = await api.get(postsUrl);
+                    var postItems = Array.isArray(postsData) ? postsData : (postsData.posts || []);
+                    postsList.innerHTML = '';
+                    if (!postItems.length) {
+                        postsList.innerHTML = '<div class="empty-state">No posts yet.</div>';
+                    } else {
+                        postItems.forEach(function (post) {
+                            if (typeof posts !== 'undefined' && typeof posts.renderPostCard === 'function') {
+                                postsList.appendChild(posts.renderPostCard(post));
+                            }
+                        });
+                    }
+                } catch (_) {
+                    postsList.innerHTML = '<div class="empty-state">Could not load posts.</div>';
+                }
+            }
         } catch (e) {
             feedArea.innerHTML = '<div class="empty-state">Failed to load profile</div>';
         }

@@ -7,6 +7,7 @@ pub mod federation;
 pub mod handlers;
 pub mod logging;
 pub mod middleware;
+pub mod proxy_rate;
 pub mod routes;
 pub mod service;
 pub mod services;
@@ -21,6 +22,10 @@ use utils::encryption::ContentEncryption;
 /// Main server logic - shared between console and service modes
 pub async fn run_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenvy::dotenv().ok();
+    // On Windows, also try the installer-generated config file so that manual
+    // runs of the binary (outside the service) pick up the correct settings.
+    #[cfg(windows)]
+    dotenvy::from_path(r"C:\ProgramData\Magnolia\magnolia.env").ok();
 
     // Initialize XDR-compatible logging
     let log_config = logging::LoggingConfig::from_env();
@@ -49,11 +54,9 @@ pub async fn run_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     .bind(&now)
     .execute(&pool)
     .await;
-    let _ = sqlx::query(
-        "UPDATE call_participants SET status = 'missed' WHERE status = 'ringing'",
-    )
-    .execute(&pool)
-    .await;
+    let _ = sqlx::query("UPDATE call_participants SET status = 'missed' WHERE status = 'ringing'")
+        .execute(&pool)
+        .await;
     let _ = sqlx::query(
         "UPDATE calls SET status = 'ended', ended_at = $1, duration_seconds = 0
          WHERE status IN ('ringing', 'active')",
@@ -62,16 +65,6 @@ pub async fn run_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     .execute(&pool)
     .await;
     tracing::info!("Stale calls cleared on startup");
-
-    // Initialize email scheduler
-    let mut email_scheduler = services::EmailSchedulerService::new(pool.clone(), settings.clone())
-        .await
-        .map_err(|e| format!("Failed to initialize email scheduler: {:?}", e))?;
-    email_scheduler
-        .start()
-        .await
-        .map_err(|e| format!("Failed to start email scheduler: {:?}", e))?;
-    tracing::info!("Email scheduler started");
 
     // Start STUN server health-check service
     services::StunHealthCheckService::new(pool.clone()).start();
@@ -83,15 +76,15 @@ pub async fn run_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     tracing::info!("Security audit service initialized");
 
     // Start embedded TURN server (if enabled)
-    let turn_config = turn::TurnConfig::from_env()
-        .map_err(|e| format!("TURN configuration error: {e}"))?;
+    let turn_config =
+        turn::TurnConfig::from_env().map_err(|e| format!("TURN configuration error: {e}"))?;
     turn::start_turn_server(&turn_config).await;
 
     // Check whether first-run setup is still needed (no users in DB).
     // If setup is already done the routes are omitted entirely so the
-    // endpoint is permanently unavailable — not just guarded at handler level.
+    // endpoint is permanently unavailable, not just guarded at handler level.
     let setup_required = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__'",
+        "SELECT COUNT(*) FROM user_accounts WHERE user_id != '__fed__' AND user_id != '__proxy__'",
     )
     .fetch_one(&pool)
     .await
@@ -140,47 +133,46 @@ pub async fn run_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         hub_status,
     );
 
-
-    /*Start server with graceful shutdown: broadcast GoingOffline before stopping.
-    tracing::info!("Starting server on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c().await.ok();
-        tracing::info!("Shutdown signal received — notifying federation peers");
-        federation::hub::broadcast_going_offline().await;
-    })
-    .await?;*/
-
     let addr = format!("{}:{}", settings.host, settings.port);
     let public_listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Server running on: {addr}");
     if let Ok(local_port) = std::env::var("LOCAL_PORT") {
         let local_addr = format!("127.0.0.1:{}", local_port);
-        let private_listener = tokio::net::TcpListener::bind(&local_addr).await?;
-        let private_serve = axum::serve(
-            private_listener,
-            app.clone().into_make_service(),
-        )
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c().await.ok();
-        });
+        match tokio::net::TcpListener::bind(&local_addr).await {
+            Ok(private_listener) => {
+                let private_serve = axum::serve(private_listener, app.clone().into_make_service())
+                    .with_graceful_shutdown(async {
+                        tokio::signal::ctrl_c().await.ok();
+                    });
 
-        let public_serve = axum::serve(
-            public_listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c().await.ok();
-            tracing::info!("Shutdown signal received — notifying federation peers");
-            federation::hub::broadcast_going_offline().await;
-        });
-        tracing::info!("Local routes running on: {local_addr}");
-        tokio::try_join!(public_serve, private_serve)?;
+                let public_serve = axum::serve(
+                    public_listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(async {
+                    tokio::signal::ctrl_c().await.ok();
+                    tracing::info!("Shutdown signal received — notifying federation peers");
+                    federation::hub::broadcast_going_offline().await;
+                });
+                tracing::info!("Local routes running on: {local_addr}");
+                tokio::try_join!(public_serve, private_serve)?;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not bind LOCAL_PORT {local_addr}: {e} - running public listener only"
+                );
+                axum::serve(
+                    public_listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(async {
+                    tokio::signal::ctrl_c().await.ok();
+                    tracing::info!("Shutdown signal received, notifying federation peers");
+                    federation::hub::broadcast_going_offline().await;
+                })
+                .await?;
+            }
+        }
     } else {
         axum::serve(
             public_listener,

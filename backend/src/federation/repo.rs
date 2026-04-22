@@ -83,7 +83,7 @@ pub async fn get_connection_by_address(
     .await
 }
 
-/// Returns all active connections — used when fanning out discovery or messages.
+/// Returns all active connections. Used when fanning out discovery or messages.
 pub async fn list_active_connections(pool: &AnyPool) -> sqlx::Result<Vec<ServerConnectionRow>> {
     sqlx::query_as::<_, ServerConnectionRow>(
         "SELECT id, address, display_name, status,
@@ -505,7 +505,7 @@ pub struct SharableUser {
     pub user_id: String,
     pub username: String,
     pub display_name: Option<String>,
-    /// `avatar_media_id` from user_accounts — caller constructs the full URL.
+    /// `avatar_media_id` from local user_accounts, caller constructs the full URL.
     pub avatar_media_id: Option<String>,
     /// ECDH public key (stored as JWK by the e2e.js module via `public_key` column).
     pub ecdh_public_key: Option<String>,

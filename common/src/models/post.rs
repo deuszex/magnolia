@@ -57,6 +57,8 @@ pub struct PostContent {
     /// File size in bytes (for media)
     pub file_size: Option<i64>,
     pub created_at: String,
+    /// Hex-encoded AES-256-GCM nonce when content is encrypted at rest; None = plaintext.
+    pub content_nonce: Option<String>,
 }
 
 /// Post with its content items and metadata for API responses

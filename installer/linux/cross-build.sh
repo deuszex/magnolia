@@ -1,6 +1,9 @@
 #!/bin/bash
 # Cross-compile Linux .deb package using cargo-zigbuild.
-# Works natively on Windows, macOS, and Linux — no Docker, no WSL.
+# Works natively on Windows, macOS, and Linux, no Docker, no WSL.
+# This workaround was done because one of the ways to compile is
+# cargo cross, which uses docker. Also not everyone wants to fight WSL,
+# if they are even doing this on windows to begin with.
 #
 # Prerequisites:
 # - Zig installed (https://ziglang.org/download/ or: winget install zig.zig)

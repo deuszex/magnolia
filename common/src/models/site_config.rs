@@ -29,6 +29,20 @@ pub struct SiteConfig {
     /// When true, an invite with a bound email requires registration with that exact address
     pub enforce_invite_email: i32,
 
+    // -- Password reset methods --
+    /// Allow users to reset via email token (requires SMTP)
+    pub password_reset_email_enabled: i32,
+    /// Allow users to reset via downloaded HMAC signing key
+    pub password_reset_signing_key_enabled: i32,
+
+    // -- Proxy account system
+    /// Enable system on the server
+    pub proxy_user_system: i32,
+    /// Default max media uploads per minute for proxies (pieces)
+    pub proxy_rate_limit_pieces: i32,
+    /// Default max media upload bytes per minute for proxies
+    pub proxy_rate_limit_bytes: i32,
+
     // -- Metadata --
     pub created_at: String,
     pub updated_at: String,

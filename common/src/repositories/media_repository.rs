@@ -19,8 +19,8 @@ impl MediaRepository {
  thumbnail_path, filename, mime_type, file_size, duration_seconds,
  width, height, file_hash, description, tags, encryption_nonce,
  is_deleted, origin_server, origin_media_id, is_cached, is_fetching,
- created_at, updated_at)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+ created_at, updated_at, proxy_owner_id)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
  "#,
         )
         .bind(&media.media_id)
@@ -45,6 +45,7 @@ impl MediaRepository {
         .bind(media.is_fetching)
         .bind(&media.created_at)
         .bind(&media.updated_at)
+        .bind(&media.proxy_owner_id)
         .execute(&self.pool)
         .await?;
 
@@ -85,7 +86,7 @@ impl MediaRepository {
         let limit = filter.limit.unwrap_or(50).min(200) as i64;
         let offset = filter.offset.unwrap_or(0).max(0) as i64;
 
-        // Build parameterized query — track bind index as optional conditions are added.
+        // Build parameterized query, track bind index as optional conditions are added.
         // $1 is always owner_id; limit/offset are always the last two.
         let mut query = String::from("SELECT * FROM media WHERE owner_id = $1 AND is_deleted = 0");
         let mut idx = 2usize;
@@ -429,12 +430,10 @@ impl MediaRepository {
 
     /// Release the fetching lock without marking cached (called on fetch failure).
     pub async fn clear_fetching(&self, media_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"UPDATE media SET is_fetching = 0 WHERE media_id = $1"#,
-        )
-        .bind(media_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(r#"UPDATE media SET is_fetching = 0 WHERE media_id = $1"#)
+            .bind(media_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -442,11 +441,7 @@ impl MediaRepository {
 
     /// Returns true if either party has blocked the other (local user_ids only).
     /// Used before serving media so blocked users can't retrieve each other's files.
-    pub async fn is_blocked_local(
-        &self,
-        user_a: &str,
-        user_b: &str,
-    ) -> Result<bool, sqlx::Error> {
+    pub async fn is_blocked_local(&self, user_a: &str, user_b: &str) -> Result<bool, sqlx::Error> {
         let count: (i64,) = sqlx::query_as(
             r#"SELECT COUNT(*) FROM user_blocks
                WHERE (user_id = $1 AND blocked_user_id = $2)

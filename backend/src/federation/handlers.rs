@@ -60,7 +60,11 @@ use super::{
     },
 };
 use crate::events::{create_admin_event, record_federation_violation};
-use crate::{config::Settings, middleware::AuthMiddleware, utils::encryption::ContentEncryption};
+use crate::{
+    config::Settings,
+    middleware::AuthMiddleware,
+    utils::encryption::{ContentEncryption, encrypt_text},
+};
 
 pub type AppState = (AnyPool, Arc<Settings>);
 
@@ -400,7 +404,7 @@ pub async fn admin_accept_connection(
 
     // Push our current user list to the new peer.
     // Small delay to let the accept be received and the connection activated on the peer side
-    // before the sync arrives — the peer rejects syncs from non-active connections.
+    // before the sync arrives, the peer rejects syncs from non-active connections.
     let pool_clone = pool(&state).clone();
     let settings_clone = Arc::clone(settings(&state));
     let identity_clone = Arc::clone(&identity);
@@ -716,7 +720,7 @@ pub async fn s2s_receive_connect(
     }
 }
 
-/// Inbound accept from Side B — Side A decapsulates to get the shared secret.
+/// Inbound accept from Side B (other server), Side A (this server) decapsulates to get the shared secret.
 pub async fn s2s_receive_accept(
     State(state): State<AppState>,
     axum::Extension(identity): axum::Extension<Arc<ServerIdentity>>,
@@ -737,7 +741,7 @@ pub async fn s2s_receive_accept(
     let peer_address = accept.address.trim_end_matches('/').to_string();
 
     // Find our pending_out record.
-    // Prefer lookup by request_id (our own connection ID echoed back by Side B) — this
+    // Prefer lookup by request_id (our own connection ID echoed back by Side B), this
     // is immune to base_url mismatches where the admin entered a different address from
     // what Side B reports as its base_url (e.g. 127.0.0.1 vs localhost).
     let conn_by_id = if let Some(ref rid) = accept.request_id {
@@ -947,7 +951,7 @@ pub async fn s2s_receive_accept(
     }
 }
 
-/// Inbound disconnect notice — peer is revoking this connection.
+/// Inbound disconnect notice about the other peer intentionally revoking this connection.
 pub async fn s2s_receive_disconnect(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1122,7 +1126,10 @@ async fn create_message_media_stubs(
     let now_str = chrono::Utc::now().to_rfc3339();
     let mut local_ids = Vec::new();
     for att in &attachments {
-        let local_media_id = match media_repo.find_by_origin(&peer_address, &att.media_id).await {
+        let local_media_id = match media_repo
+            .find_by_origin(&peer_address, &att.media_id)
+            .await
+        {
             Ok(Some(existing)) => existing.media_id,
             _ => {
                 let new_id = Uuid::new_v4().to_string();
@@ -1296,7 +1303,11 @@ pub async fn s2s_receive_message(
                 identity.remote_user_id
             }
             Ok(None) | Err(_) => {
-                // Fetch failed or denied — reject the message and notify admins.
+                // Fetch failed or denied, reject the message and notify admins.
+                // If a federated user is trying to connect a local user without revealing themselves
+                // through their own federation settings, we will qualify it as "harassment".
+                // User accounts can be named and bio-d anyhow, but if you can't even notify
+                // federated admin about the actor account, we flag it as malicious.
                 warn!(
                     "s2s_receive_message: rejecting message from unverifiable sender '{}' at {}",
                     sender_username, conn.address
@@ -1380,7 +1391,7 @@ pub async fn s2s_receive_message(
         if let Some(id) = existing {
             id
         } else {
-            // First message from this remote group — create a local group conversation.
+            // First message from this remote group, each server should create a local group conversation.
             let new_id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let group_name = envelope.group_name.as_deref().unwrap_or("Federated Group");
@@ -1432,7 +1443,7 @@ pub async fn s2s_receive_message(
             new_id
         }
     } else {
-        // Direct message path — find or create a per-sender federated DM.
+        // Direct message path, should be mirrored on the other server, find or create a per-sender federated DM.
         match repo::find_federated_dm(pool(&state), &recipient_id, &conn.id, &remote_user_id).await
         {
             Ok(Some(id)) => id,
@@ -1464,14 +1475,24 @@ pub async fn s2s_receive_message(
     // if the sender retries after a transient failure, the INSERT OR IGNORE means
     // we won't create a duplicate message on the receiving side.
     let message_id = envelope.queue_id.clone();
+    let (stored_content, content_nonce) =
+        match encrypt_text(settings(&state), pool(&state), &inner.encrypted_content).await {
+            Ok(v) => v,
+            Err(e) => {
+                error!("s2s_receive_message: encrypt content failed: {:?}", e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
     let msg = magnolia_common::models::Message {
         message_id: message_id.clone(),
         conversation_id: conversation_id.clone(),
         sender_id: "__fed__".to_string(),
         remote_sender_qualified_id: Some(envelope.sender_qualified_id.clone()),
-        encrypted_content: inner.encrypted_content.clone(),
+        proxy_sender_id: None,
+        encrypted_content: stored_content.clone(),
         created_at: inner.sent_at.clone(),
-        federated_status: None, // inbound — no outbound status
+        federated_status: None, // inbound, no outbound status
+        content_nonce: content_nonce.clone(),
     };
 
     let msg_repo = magnolia_common::repositories::MessageRepository::new(pool(&state).clone());
@@ -1479,8 +1500,8 @@ pub async fn s2s_receive_message(
     match sqlx::query(
         r#"INSERT OR IGNORE INTO messages
            (message_id, conversation_id, sender_id, remote_sender_qualified_id,
-            encrypted_content, created_at, federated_status)
-           VALUES ($1, $2, $3, $4, $5, $6, NULL)"#,
+            encrypted_content, created_at, federated_status, content_nonce)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7)"#,
     )
     .bind(&msg.message_id)
     .bind(&msg.conversation_id)
@@ -1488,12 +1509,16 @@ pub async fn s2s_receive_message(
     .bind(&msg.remote_sender_qualified_id)
     .bind(&msg.encrypted_content)
     .bind(&msg.created_at)
+    .bind(&msg.content_nonce)
     .execute(pool(&state))
     .await
     {
         Ok(r) if r.rows_affected() == 0 => {
-            // Already stored — idempotent OK so sender marks delivered.
-            info!("s2s_receive_message: duplicate delivery {} (already stored)", message_id);
+            // Already stored, idempotent OK so sender marks delivered.
+            info!(
+                "s2s_receive_message: duplicate delivery {} (already stored)",
+                message_id
+            );
             let _ = repo::update_last_seen(pool(&state), &conn.id).await;
             return StatusCode::OK.into_response();
         }
@@ -1823,6 +1848,7 @@ pub async fn s2s_get_user_identity(
  WHERE ua.username = $1
  AND ua.active = 1
  AND ua.user_id != '__fed__'
+ AND ua.user_id != '__proxy__'
  AND ufs.sharing_mode != 'off'",
     )
     .bind(&username)
@@ -2260,7 +2286,7 @@ pub async fn admin_get_hub_status() -> impl IntoResponse {
 /// Decrypt an incoming S2S request body if `X-Magnolia-Encrypted: 1` is present.
 ///
 /// Returns the plaintext bytes (or the original bytes unchanged if not encrypted).
-/// `conn` must have a `shared_secret` — returns `Err(response)` if decryption fails.
+/// `conn` must have a `shared_secret` with the other server, returns `Err(response)` if decryption fails.
 fn decrypt_body_if_needed(
     headers: &HeaderMap,
     body: &axum::body::Bytes,
@@ -2354,11 +2380,13 @@ async fn get_verified_connection(
             Err(_) => continue,
         };
         if verify_request(body, meta, &vk).is_ok() {
-            // Signature verified — peer is known but calling from a new address.
+            // Signature verified, peer is known but calling from a new address.
             // Update the stored address so the fast path works next time.
+            // This can happen because of physical server move, different ISP, or VPN.
+            // Not necessarily malicious, but TODO: come up with counter measure.
             if conn.address != sender_address {
                 info!(
-                    "get_verified_connection: peer {} now reachable at '{}' (was '{}') — updating",
+                    "get_verified_connection: peer {} now reachable at '{}' (was '{}'), updating",
                     conn.id, sender_address, conn.address
                 );
                 let _ = repo::update_connection_address(pool, &conn.id, &sender_address).await;
@@ -2512,7 +2540,7 @@ pub async fn s2s_serve_media_file(
 
     let repo = magnolia_common::repositories::MediaRepository::new(pool.clone());
 
-    // Load the media row — must be local, cached, and not deleted
+    // Load the media row, must be local, cached, and not deleted
     let media = match repo.get_by_id(&media_id).await {
         Ok(Some(m)) => m,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),

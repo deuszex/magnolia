@@ -190,6 +190,31 @@ impl RequireAuth for Request {
     }
 }
 
+/// Middleware that silently resolves the session cookie when present.
+/// Does NOT reject unauthenticated requests, it just populates the
+/// `AuthMiddleware` extension so `OptionalAuth` can see the user on
+/// routes that are otherwise public.
+pub async fn try_auth(
+    State((pool, _settings)): State<(AnyPool, Arc<Settings>)>,
+    jar: CookieJar,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    if let Some(session_id) = jar.get(SESSION_COOKIE_NAME).map(|c| c.value().to_string()) {
+        let user_repo = UserRepository::new(pool);
+        if let Ok(Some(session)) = user_repo.find_session(&session_id).await {
+            if !session.is_expired() {
+                if let Ok(Some(user)) = user_repo.find_by_id(&session.user_id).await {
+                    if user.active != 0 {
+                        req.extensions_mut().insert(AuthMiddleware { user });
+                    }
+                }
+            }
+        }
+    }
+    next.run(req).await
+}
+
 // Optional auth extractor - returns Some(AuthMiddleware) if authenticated, None otherwise
 pub struct OptionalAuth(pub Option<AuthMiddleware>);
 
